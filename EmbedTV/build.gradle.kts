@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 cloudstream {
     description = "Embed TV - O melhor site de TV online. "
