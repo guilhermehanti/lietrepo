@@ -8,7 +8,7 @@ import org.json.JSONObject
 
 object PobreFlixExtractor {
 
-    private const val BASE_URL = "https://superflixapi.rest"
+    private const val BASE_URL = "https://superflixapi.online"
     private const val CDN_BASE = "https://llanfairpwllgwyngy.com"
 
     private val HEADERS = mapOf(
