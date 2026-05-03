@@ -103,10 +103,10 @@
     },
     {
         "iconUrl": "https://embedtv.best/assets/icon.png",
-        "fileHash": "sha256-a5b2c7a3e61560b5112fe712685b6a6baa6ce25060dec772ec72ff60faa3314c",
+        "fileHash": "sha256-977a71d2e1a9d0d8cc1d5658141dd00798f3302007422fc7ea542fe6a825bcaf",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 13887,
+        "fileSize": 15132,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -115,7 +115,7 @@
         "tvTypes": [
             "Live"
         ],
-        "version": 2,
+        "version": 3,
         "internalName": "EmbedTV",
         "description": "Embed TV - O melhor site de TV online. ",
         "url": "https://github.com/lawlietbr/lietrepo/raw/refs/heads/main/builds/EmbedTV.cs3",
