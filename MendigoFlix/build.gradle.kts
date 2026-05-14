@@ -12,7 +12,7 @@ android {
     compileSdk = 33
 
     defaultConfig {
-        minSdk = 24
+        minSdk = 21
 
         val tmdbApiKey = project.findProperty("TMDB_API_KEY") as? String
             ?: System.getenv("TMDB_API_KEY")
