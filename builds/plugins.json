@@ -165,10 +165,10 @@
     },
     {
         "iconUrl": "https://www.image2url.com/r2/default/images/1776018665375-eafe8c65-10f1-490c-9994-2f519402b6e3.png",
-        "fileHash": "sha256-3a3248064b78be0d2f4c84ea9bc80c89ccffacf0fe00028d0dadb67913a5f916",
+        "fileHash": "sha256-e7fbfe9f966beed37f0733b9745177a9a315285fee172766a3e937b9c5f857a3",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 44871,
+        "fileSize": 43752,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -180,7 +180,7 @@
             "Animes",
             "AsianDrama"
         ],
-        "version": 2,
+        "version": 3,
         "internalName": "PobreFlix",
         "description": "PobreFlix, assistir online, filmes, s\u00e9ries, animes, doramas",
         "url": "https://github.com/lawlietbr/lietrepo/raw/refs/heads/main/builds/PobreFlix.cs3",
