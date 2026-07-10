@@ -249,12 +249,12 @@ class DattebayoBR : MainAPI() {
             }
             .maxOrNull() ?: 1
 
-        // 3. Se houver mais de 1 página, busca o resto de forma paralela (apmap)
+        // 3. Se houver mais de 1 página, busca o resto de forma paralela (amap)
         if (lastPage > 1) {
             // CORREÇÃO AQUI: URL formatada exatamente como no HTML do site (&page=X)
             val pageUrls = (2..lastPage).map { "$mainUrl/busca?busca=$formattedQuery&page=$it" }
             
-            val additionalResults = pageUrls.apmap { pageUrl ->
+            val additionalResults = pageUrls.amap { pageUrl ->
                 try {
                     val pageDoc = app.get(pageUrl).document
                     pageDoc.select(HOME_ITEM).mapNotNull { it.toSearchResponse() }
@@ -347,11 +347,11 @@ class DattebayoBR : MainAPI() {
             }
             .maxOrNull() ?: 1
 
-        // 3. Se houver mais de 1 página, busca o resto de forma paralela (apmap)
+        // 3. Se houver mais de 1 página, busca o resto de forma paralela (amap)
         if (lastPage > 1) {
             val pageUrls = (2..lastPage).map { "${actualUrl.removeSuffix("/")}/page/$it" }
             
-            val additionalEpisodes = pageUrls.apmap { pageUrl ->
+            val additionalEpisodes = pageUrls.amap { pageUrl ->
                 try {
                     val pageDoc = app.get(pageUrl).document
                     parseEpisodesFromDoc(pageDoc)
