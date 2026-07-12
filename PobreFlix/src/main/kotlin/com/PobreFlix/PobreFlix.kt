@@ -19,7 +19,7 @@ class PobreFlixProvider : Plugin() {
 }
 
 class PobreFlix : MainAPI() {
-    override var mainUrl = "https://lospobreflix.site"
+    override var mainUrl = "https://lospobreflix.lat"
     override var name = "PobreFlix "
     override val hasMainPage = true
     override var lang = "pt-br"
@@ -158,23 +158,15 @@ class PobreFlix : MainAPI() {
         }
     }
 
-    
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.length < 2) return emptyList()
-        
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery"
         
         return try {
             val document = app.get(searchUrl).document
             document.select("article.group, .grid article, .group\\/card")
-                .mapNotNull { element ->
-                    try {
-                        element.toSearchResult()
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
+                .mapNotNull { element -> try { element.toSearchResult() } catch (e: Exception) { null } }
         } catch (e: Exception) {
             emptyList()
         }
@@ -182,41 +174,26 @@ class PobreFlix : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         if (query.length < 2) return null
-        
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val searchUrl = if (page > 1) {
-            "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=$page"
-        } else {
-            "$mainUrl$SEARCH_PATH?s=$encodedQuery"
-        }
+        val searchUrl = if (page > 1) "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=$page" else "$mainUrl$SEARCH_PATH?s=$encodedQuery"
         
         return try {
             val document = app.get(searchUrl).document
             val results = document.select("article.group, .grid article, .group\\/card")
-                .mapNotNull { element ->
-                    try {
-                        element.toSearchResult()
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
+                .mapNotNull { element -> try { element.toSearchResult() } catch (e: Exception) { null } }
             
             var hasNextPage = false
             if (results.isNotEmpty()) {
                 val nextPageUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=${page + 1}"
                 try {
                     val nextPageDoc = app.get(nextPageUrl).document
-                    val nextPageResults = nextPageDoc.select("article.group, .grid article, .group\\/card")
-                    hasNextPage = nextPageResults.isNotEmpty()
+                    hasNextPage = nextPageDoc.select("article.group, .grid article, .group\\/card").isNotEmpty()
                 } catch (e: Exception) {
                     hasNextPage = false
                 }
             }
-            
             results.toNewSearchResponseList(hasNextPage)
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -238,22 +215,12 @@ class PobreFlix : MainAPI() {
             }
             poster = fixImageUrl(poster)
             
-            var backdrop: String? = null
-            
-            backdrop = document.selectFirst("#movie-player-container")?.attr("data-backdrop")
-            
-            if (backdrop.isNullOrBlank()) {
-                backdrop = document.selectFirst("#movie-player-container img")?.attr("src")
-            }
-            
-            if (backdrop.isNullOrBlank()) {
-                backdrop = document.selectFirst("img[alt*='backdrop']")?.attr("src")
-            }
-            
+            var backdrop = document.selectFirst("#movie-player-container")?.attr("data-backdrop")
+            if (backdrop.isNullOrBlank()) backdrop = document.selectFirst("#movie-player-container img")?.attr("src")
+            if (backdrop.isNullOrBlank()) backdrop = document.selectFirst("img[alt*='backdrop']")?.attr("src")
             backdrop = fixImageUrl(backdrop)
             
             var rating: Float? = null
-            
             val ratingSvg = document.selectFirst(".inline-flex.items-center.gap-3.rounded-2xl .text-\\[12px\\].font-extrabold")
             if (ratingSvg != null) {
                 val ratingText = ratingSvg.text().trim()
@@ -267,45 +234,26 @@ class PobreFlix : MainAPI() {
             if (rating == null) {
                 val infoBar = document.selectFirst(".flex.gap-2.text-sm.flex-wrap.items-center")
                 if (infoBar != null) {
-                    val ratingSpan = infoBar.selectFirst(".text-lead")
-                    if (ratingSpan != null) {
-                        rating = ratingSpan.text().trim().toFloatOrNull()
-                    }
+                    rating = infoBar.selectFirst(".text-lead")?.text()?.trim()?.toFloatOrNull()
                 }
             }
             
             var duration: Int? = null
             if (!isAnime && !isSerie) {
-                val infoBar = document.selectFirst(".flex.gap-2.text-sm.flex-wrap.items-center")
-                if (infoBar != null) {
-                    val durationSpan = infoBar.select("span").lastOrNull()
-                    if (durationSpan != null) {
-                        val durationText = durationSpan.text()
-                        duration = parseDuration(durationText)
-                    }
-                }
+                val durationSpan = document.selectFirst(".flex.gap-2.text-sm.flex-wrap.items-center")?.select("span")?.lastOrNull()
+                duration = durationSpan?.text()?.let { parseDuration(it) }
             }
             
             if (year == null) {
-                val infoBar = document.selectFirst(".flex.gap-2.text-sm.flex-wrap.items-center")
-                if (infoBar != null) {
-                    val yearSpan = infoBar.select("span").firstOrNull { it.text().matches(Regex("\\d{4}")) }
-                    if (yearSpan != null) {
-                        year = yearSpan.text().toIntOrNull()
-                    }
-                }
+                val yearSpan = document.selectFirst(".flex.gap-2.text-sm.flex-wrap.items-center")?.select("span")?.firstOrNull { it.text().matches(Regex("\\d{4}")) }
+                year = yearSpan?.text()?.toIntOrNull()
             }
             
             var synopsis = document.selectFirst(".text-slate-700.dark\\:text-slate-200.md\\:text-lg")?.text()?.trim()
-            if (synopsis.isNullOrBlank()) {
-                synopsis = document.selectFirst("meta[name='description']")?.attr("content")?.trim()
-            }
+            if (synopsis.isNullOrBlank()) synopsis = document.selectFirst("meta[name='description']")?.attr("content")?.trim()
             synopsis = synopsis?.replace(Regex("\\|.*$"), "")?.trim()
             
-            val tags = document.select(".flex.flex-wrap.gap-2.pt-4 a")
-                .map { it.text().trim() }
-                .filter { it.isNotBlank() }
-                .takeIf { it.isNotEmpty() }
+            val tags = document.select(".flex.flex-wrap.gap-2.pt-4 a").map { it.text().trim() }.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
             
             val cast = document.select("#cast-section .swiper-slide, .cast-swiper .swiper-slide")
                 .mapNotNull { element ->
@@ -314,45 +262,27 @@ class PobreFlix : MainAPI() {
                         val imageUrl = element.selectFirst("img")?.attr("src")?.let { fixImageUrl(it) }
                         Actor(name = name, image = imageUrl)
                     } catch (e: Exception) { null }
-                }
-                .takeIf { it.isNotEmpty() }
+                }.takeIf { it.isNotEmpty() }
             
             var trailerUrl: String? = null
             try {
-                val scripts = document.select("script")
-                for (script in scripts) {
+                for (script in document.select("script")) {
                     val data = script.data()
                     if (data.contains("__trailerKeys")) {
-                        val pattern = Regex("""__trailerKeys\s*=\s*\[([^\]]+)\]""")
-                        val match = pattern.find(data)
-                        if (match != null) {
-                            val keysString = match.groupValues[1]
-                            val keyPattern = Regex("[\"']([^\"']+)[\"']")
-                            val keyMatch = keyPattern.find(keysString)
-                            if (keyMatch != null) {
-                                val trailerKey = keyMatch.groupValues[1]
-                                trailerUrl = "https://www.youtube.com/watch?v=$trailerKey"
-                                break
-                            }
+                        val keyMatch = Regex("[\"']([^\"']+)[\"']").find(Regex("""__trailerKeys\s*=\s*\[([^\]]+)\]""").find(data)?.groupValues?.get(1) ?: "")
+                        if (keyMatch != null) {
+                            trailerUrl = "https://www.youtube.com/watch?v=${keyMatch.groupValues[1]}"
+                            break
                         }
                     }
                 }
-                
                 if (trailerUrl == null) {
-                    val trailerSection = document.selectFirst("#trailers-section .trailer-thumb-btn")
-                    if (trailerSection != null) {
-                        val trailerKey = trailerSection.attr("data-yt")
-                        if (trailerKey.isNotBlank()) {
-                            trailerUrl = "https://www.youtube.com/watch?v=$trailerKey"
-                        }
-                    }
+                    val trailerKey = document.selectFirst("#trailers-section .trailer-thumb-btn")?.attr("data-yt")
+                    if (!trailerKey.isNullOrBlank()) trailerUrl = "https://www.youtube.com/watch?v=$trailerKey"
                 }
-                
                 if (trailerUrl == null) {
                     val youtubeLink = document.selectFirst("a[href*='youtube.com/watch']")?.attr("href")
-                    if (youtubeLink != null && youtubeLink.isNotBlank()) {
-                        trailerUrl = youtubeLink
-                    }
+                    if (!youtubeLink.isNullOrBlank()) trailerUrl = youtubeLink
                 }
             } catch (e: Exception) { }
             
@@ -362,19 +292,11 @@ class PobreFlix : MainAPI() {
                         val recUrl = element.attr("href")
                         if (recUrl.isBlank()) return@mapNotNull null
                         
-                        var recImg: String? = null
-                        val imgElement = element.selectFirst("img")
-                        if (imgElement != null) {
-                            recImg = imgElement.attr("src")
-                            if (recImg.isNullOrBlank()) recImg = imgElement.attr("data-src")
-                            if (!recImg.isNullOrBlank()) {
-                                recImg = fixImageUrl(recImg)
-                            }
-                        }
+                        var recImg = element.selectFirst("img")?.attr("src")
+                        if (recImg.isNullOrBlank()) recImg = element.selectFirst("img")?.attr("data-src")
+                        recImg = fixImageUrl(recImg)
                         
-                        val recTitle = element.selectFirst("h3, .text-white.font-bold")?.text()?.trim()
-                            ?: return@mapNotNull null
-                        
+                        val recTitle = element.selectFirst("h3, .text-white.font-bold")?.text()?.trim() ?: return@mapNotNull null
                         val recIsAnime = recUrl.contains("/anime/")
                         val recIsSerie = recUrl.contains("/serie/") || recUrl.contains("/dorama/")
                         val recYear = element.selectFirst(".text-white\\/70.text-xs")?.text()?.toIntOrNull()
@@ -382,26 +304,13 @@ class PobreFlix : MainAPI() {
                         var recScore: Float? = null
                         val scoreText = element.selectFirst(".absolute.top-2.right-2 .text-\\[10px\\].font-bold, .absolute.top-2.right-2 text")?.text()
                         if (!scoreText.isNullOrBlank()) {
-                            val percent = scoreText.replace("%", "").trim().toFloatOrNull()
-                            recScore = percent?.let { it / 10 }
+                            recScore = scoreText.replace("%", "").trim().toFloatOrNull()?.let { it / 10 }
                         }
                         
                         when {
-                            recIsAnime -> newAnimeSearchResponse(recTitle, fixUrl(recUrl), TvType.Anime) {
-                                this.posterUrl = recImg
-                                this.year = recYear
-                                if (recScore != null) this.score = Score.from10(recScore)
-                            }
-                            recIsSerie -> newTvSeriesSearchResponse(recTitle, fixUrl(recUrl), TvType.TvSeries) {
-                                this.posterUrl = recImg
-                                this.year = recYear
-                                if (recScore != null) this.score = Score.from10(recScore)
-                            }
-                            else -> newMovieSearchResponse(recTitle, fixUrl(recUrl), TvType.Movie) {
-                                this.posterUrl = recImg
-                                this.year = recYear
-                                if (recScore != null) this.score = Score.from10(recScore)
-                            }
+                            recIsAnime -> newAnimeSearchResponse(recTitle, fixUrl(recUrl), TvType.Anime) { this.posterUrl = recImg; this.year = recYear; if (recScore != null) this.score = Score.from10(recScore) }
+                            recIsSerie -> newTvSeriesSearchResponse(recTitle, fixUrl(recUrl), TvType.TvSeries) { this.posterUrl = recImg; this.year = recYear; if (recScore != null) this.score = Score.from10(recScore) }
+                            else -> newMovieSearchResponse(recTitle, fixUrl(recUrl), TvType.Movie) { this.posterUrl = recImg; this.year = recYear; if (recScore != null) this.score = Score.from10(recScore) }
                         }
                     } catch (e: Exception) { null }
                 }
@@ -409,7 +318,6 @@ class PobreFlix : MainAPI() {
             val tmdbId = document.selectFirst("section[data-contentid]")?.attr("data-contentid")?.toIntOrNull()
             
             if (!isAnime && !isSerie) {
-                // ATUALIZADO: Passar url no loadResponse para o CloudStream
                 return newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
                     this.posterUrl = poster
                     this.backgroundPosterUrl = backdrop
@@ -476,7 +384,6 @@ class PobreFlix : MainAPI() {
                         }
                         
                         val seasonJson = jsonString.substring(startIndex, endIndex - 1)
-                        
                         val episodePattern = Regex("""\{([^{}]*?)\}""")
                         val episodeMatches = episodePattern.findAll(seasonJson)
                         
@@ -504,7 +411,6 @@ class PobreFlix : MainAPI() {
                                 thumbUrl = backdropElement?.let { fixImageUrl(it) }
                             }
                             
-                            // ATUALIZADO: Salva a URL da página do episódio
                             val episodeUrl = "$seriesUrl/${seasonNum}x${epNum}".replace("/serie/", "/episodio/")
                             
                             episodes.add(newEpisode(fixUrl(episodeUrl)) {
@@ -515,22 +421,16 @@ class PobreFlix : MainAPI() {
                                 this.description = sinopse
                                 this.runTime = durationMin
                                 if (airDate != null) this.addDate(airDate)
-                                // Metadados (opcional, só de apoio pro app)
                                 if (tmdbId != null) this.data = "$tmdbId|$seasonNum|$epNum"
                             })
                         }
                     }
-                    
-                    if (episodes.isNotEmpty()) {
-                        return episodes
-                    }
+                    if (episodes.isNotEmpty()) return episodes
                 }
             } catch (e: Exception) { }
         }
 
-        // Fallback pra extrair de grid HTML caso o script json não exista
         val episodeElements = document.select("#episodes-list article")
-        
         episodeElements.forEachIndexed { index, element ->
             try {
                 val link = element.selectFirst("a[href]") ?: return@forEachIndexed
@@ -596,29 +496,54 @@ class PobreFlix : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            // ATUALIZADO: Puxamos sempre o HTML do episódio ou filme pra ter certeza
-            // de que mandamos os parâmetros corretos para a API do PobreFlixExtractor
-            
-            val document = app.get(data).document
-            val playerContainer = document.selectFirst("#movie-player-container")
-            
-            if (playerContainer == null) return false
+            // Garante que o data é uma URL completa
+            val url = if (data.startsWith("http")) data else "$mainUrl$data"
+            val document = app.get(url).document
+            val playerContainer = document.selectFirst("#movie-player-container") ?: return false
 
             val tmdbId = playerContainer.attr("data-apicontentid").toIntOrNull() ?: return false
-            val playerType = playerContainer.attr("data-playertype").lowercase()
+            val playerType = playerContainer.attr("data-playertype").lowercase().ifEmpty { "filme" }
+            val season = playerContainer.attr("data-season").toIntOrNull() ?: 1
+            val episode = playerContainer.attr("data-episode").toIntOrNull() ?: 1
             
-            val streams = if (playerType == "episodio") {
-                val season = playerContainer.attr("data-season").toIntOrNull() ?: 1
-                val episode = playerContainer.attr("data-episode").toIntOrNull() ?: 1
-                PobreFlixExtractor.getStreams(tmdbId, "serie", season, episode)
-            } else {
-                PobreFlixExtractor.getStreams(tmdbId, "filme", 1, 1)
+            // Busca os domínios de API dinamicamente para não falhar se derrubarem um
+            val scriptContent = document.html()
+            val apisMatch = Regex("""window\.__PLAYER_APIS__\s*=\s*\[(.*?)\]""").find(scriptContent)
+            val apis = mutableListOf<String>()
+            
+            if (apisMatch != null) {
+                apisMatch.groupValues[1].split(",").forEach {
+                    val cleanApi = it.replace("\"", "").replace("'", "").trim()
+                    if (cleanApi.isNotBlank()) apis.add(cleanApi)
+                }
             }
             
-            if (streams.isEmpty()) return false
+            // Fallback caso a Regex não encontre nada
+            if (apis.isEmpty()) {
+                apis.add("warezcdn.lat")
+                apis.add("superflixapi.pro")
+            }
+
+            var foundLink = false
+            for (api in apis) {
+                val domain = if (api.startsWith("http")) api else "https://$api"
+                
+                val streams = PobreFlixExtractor.getStreams(
+                    initialDomain = domain,
+                    tmdbId = tmdbId,
+                    mediaType = if (playerType == "episodio") "serie" else "filme",
+                    season = season,
+                    episode = episode
+                )
+                
+                if (streams.isNotEmpty()) {
+                    streams.forEach { callback(it) }
+                    foundLink = true
+                    break // Se achou na primeira API, não perde tempo tentando a segunda
+                }
+            }
             
-            streams.forEach { callback(it) }
-            true
+            return foundLink
             
         } catch (e: Exception) {
             false
@@ -651,16 +576,13 @@ class PobreFlix : MainAPI() {
     
     private fun parseDuration(durationStr: String): Int? {
         val str = durationStr.lowercase().trim()
-        
         val hoursMatch = Regex("(\\d+)\\s*h").find(str)
         val minutesMatch = Regex("(\\d+)\\s*m(?:in)?").find(str)
         
         val hours = hoursMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val minutes = minutesMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
         
-        if (hours > 0 || minutes > 0) {
-            return (hours * 60) + minutes
-        }
+        if (hours > 0 || minutes > 0) return (hours * 60) + minutes
         
         val justMinutes = Regex("(\\d+)\\s*m(?:in)?").find(str)
         return justMinutes?.groupValues?.get(1)?.toIntOrNull()

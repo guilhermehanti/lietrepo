@@ -14,7 +14,6 @@ object PobreFlixExtractor {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language" to "pt-BR",
         "Accept-Encoding" to "identity",
-        "Referer" to "https://lospobreflix.site/",
         "Sec-Fetch-Dest" to "iframe",
         "Sec-Fetch-Mode" to "navigate",
         "Sec-Fetch-Site" to "cross-site",
@@ -47,13 +46,13 @@ object PobreFlixExtractor {
     }
 
     private fun extractContentIdFromTruncatedJson(html: String, targetSeason: Int, targetEpisode: Int): String? {
-        val pattern1 = Regex("\"season\":$targetSeason,\"epi_num\":$targetEpisode[^}]*?\"ID\":(\\d+)")
+        val pattern1 = Regex("\"season\":$targetSeason,\"epi_num\":$targetEpisode[^}]*?\"ID\":[\"']?(\\d+)[\"']?")
         val match1 = pattern1.find(html)
         if (match1 != null) {
             return match1.groupValues[1]
         }
         
-        val pattern2 = Regex("\"ID\":(\\d+)[^}]*?\"epi_num\":$targetEpisode[^}]*?\"season\":$targetSeason")
+        val pattern2 = Regex("\"ID\":[\"']?(\\d+)[\"']?[^}]*?\"epi_num\":$targetEpisode[^}]*?\"season\":$targetSeason")
         val match2 = pattern2.find(html)
         if (match2 != null) {
             return match2.groupValues[1]
@@ -63,7 +62,7 @@ object PobreFlixExtractor {
         val seasonMatch = seasonPattern.find(html)
         if (seasonMatch != null) {
             val seasonContent = seasonMatch.groupValues[1]
-            val episodePattern = Regex("\"epi_num\":$targetEpisode[^}]*?\"ID\":(\\d+)")
+            val episodePattern = Regex("\"epi_num\":$targetEpisode[^}]*?\"ID\":[\"']?(\\d+)[\"']?")
             val episodeMatch = episodePattern.find(seasonContent)
             if (episodeMatch != null) {
                 return episodeMatch.groupValues[1]
@@ -74,6 +73,7 @@ object PobreFlixExtractor {
     }
 
     suspend fun getStreams(
+        initialDomain: String,
         tmdbId: Int,
         mediaType: String,
         season: Int,
@@ -84,25 +84,25 @@ object PobreFlixExtractor {
         val targetEpisode = if (mediaType == "filme") 1 else episode
 
         try {
-            // ATUALIZADO: Domínio correto extraído do HTML do site atual
-            val initialDomain = "https://superflixapi.pro" 
-            
             val pageUrl = if (mediaType == "filme") {
                 "$initialDomain/filme/$tmdbId"
             } else {
                 "$initialDomain/serie/$tmdbId/$targetSeason/$targetEpisode"
             }
             
-            val response = app.get(pageUrl, headers = HEADERS + getCookieHeader())
-            if (!response.isSuccessful) {
-                return emptyList()
-            }
+            // Adiciona o Referer dinâmico
+            val reqHeaders = HEADERS.toMutableMap()
+            reqHeaders["Referer"] = "https://lospobreflix.lat/"
+
+            val response = app.get(pageUrl, headers = reqHeaders + getCookieHeader())
+            if (!response.isSuccessful) return emptyList()
             
             val finalUrl = response.url
             val baseUrl = extractBaseDomain(finalUrl)
             
             val updatedApiHeaders = API_HEADERS.toMutableMap()
             updatedApiHeaders["Origin"] = baseUrl
+            updatedApiHeaders["Referer"] = finalUrl
             
             val setCookie = response.headers["set-cookie"]
             if (setCookie != null && setCookie.isNotEmpty()) {
@@ -112,21 +112,17 @@ object PobreFlixExtractor {
             val html = response.text
             
             val csrfMatch = Regex("CSRF_TOKEN\\s*=\\s*[\"']([^\"']+)[\"']").find(html)
-            if (csrfMatch == null) {
-                return emptyList()
-            }
+            if (csrfMatch == null) return emptyList()
             val csrfToken = csrfMatch.groupValues[1]
             
             val pageMatch = Regex("PAGE_TOKEN\\s*=\\s*[\"']([^\"']+)[\"']").find(html)
-            if (pageMatch == null) {
-                return emptyList()
-            }
+            if (pageMatch == null) return emptyList()
             val pageToken = pageMatch.groupValues[1]
             
             var contentId: String? = null
             
             if (mediaType == "filme") {
-                val initialContentMatch = Regex("INITIAL_CONTENT_ID\\s*=\\s*(\\d+)").find(html)
+                val initialContentMatch = Regex("INITIAL_CONTENT_ID\\s*=\\s*[\"']?(\\d+)[\"']?").find(html)
                 if (initialContentMatch != null) {
                     contentId = initialContentMatch.groupValues[1]
                 }
@@ -134,9 +130,7 @@ object PobreFlixExtractor {
                 contentId = extractContentIdFromTruncatedJson(html, targetSeason, targetEpisode)
             }
             
-            if (contentId == null) {
-                return emptyList()
-            }
+            if (contentId == null) return emptyList()
             
             val optionsParams = mutableMapOf<String, String>()
             optionsParams["contentid"] = contentId
@@ -151,20 +145,11 @@ object PobreFlixExtractor {
                 data = optionsParams
             )
             
-            if (!optionsResponse.isSuccessful) {
-                return emptyList()
-            }
+            if (!optionsResponse.isSuccessful) return emptyList()
             
             val optionsData = JSONObject(optionsResponse.text)
-            val dataObj = optionsData.optJSONObject("data")
-            if (dataObj == null) {
-                return emptyList()
-            }
-            
-            val optionsArray = dataObj.optJSONArray("options")
-            if (optionsArray == null) {
-                return emptyList()
-            }
+            val dataObj = optionsData.optJSONObject("data") ?: return emptyList()
+            val optionsArray = dataObj.optJSONArray("options") ?: return emptyList()
             
             for (i in 0 until optionsArray.length()) {
                 val option = optionsArray.getJSONObject(i)
@@ -195,7 +180,7 @@ object PobreFlixExtractor {
                 val redirectUrl = sourceData.optJSONObject("data")?.optString("video_url")
                 if (redirectUrl.isNullOrEmpty()) continue
                 
-                val redirectResponse = app.get(redirectUrl, headers = HEADERS + getCookieHeader())
+                val redirectResponse = app.get(redirectUrl, headers = reqHeaders + getCookieHeader())
                 val finalVideoUrl = redirectResponse.url
                 
                 if (finalVideoUrl.contains("blogger.com/video.g") || finalVideoUrl.contains("blogger.com")) {
@@ -211,8 +196,8 @@ object PobreFlixExtractor {
                 
                 results.add(
                     newExtractorLink(
-                        source = "SuperFlixAPI",
-                        name = "SuperFlixAPI $serverType",
+                        source = "PobreFlixAPI",
+                        name = "PobreFlixAPI $serverType",
                         url = finalVideoUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
@@ -225,7 +210,6 @@ object PobreFlixExtractor {
                     }
                 )
             }
-            
             return results
             
         } catch (e: Exception) {
