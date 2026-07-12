@@ -84,7 +84,8 @@ object PobreFlixExtractor {
         val targetEpisode = if (mediaType == "filme") 1 else episode
 
         try {
-            val initialDomain = "https://superflixapi.online"
+            // ATUALIZADO: Domínio correto extraído do HTML do site atual
+            val initialDomain = "https://superflixapi.pro" 
             
             val pageUrl = if (mediaType == "filme") {
                 "$initialDomain/filme/$tmdbId"
@@ -175,9 +176,7 @@ object PobreFlixExtractor {
                     else -> "Tipo $type"
                 }
                 
-                if (videoId.isEmpty()) {
-                    continue
-                }
+                if (videoId.isEmpty()) continue
                 
                 val sourceParams = mutableMapOf<String, String>()
                 sourceParams["video_id"] = videoId
@@ -190,15 +189,11 @@ object PobreFlixExtractor {
                     data = sourceParams
                 )
                 
-                if (!sourceResponse.isSuccessful) {
-                    continue
-                }
+                if (!sourceResponse.isSuccessful) continue
                 
                 val sourceData = JSONObject(sourceResponse.text)
                 val redirectUrl = sourceData.optJSONObject("data")?.optString("video_url")
-                if (redirectUrl.isNullOrEmpty()) {
-                    continue
-                }
+                if (redirectUrl.isNullOrEmpty()) continue
                 
                 val redirectResponse = app.get(redirectUrl, headers = HEADERS + getCookieHeader())
                 val finalVideoUrl = redirectResponse.url
@@ -207,36 +202,28 @@ object PobreFlixExtractor {
                     continue
                 }
                 
-                var videoUrl = finalVideoUrl
                 var quality = 720
+                if (finalVideoUrl.contains("2160") || finalVideoUrl.contains("4k")) quality = 2160
+                else if (finalVideoUrl.contains("1440")) quality = 1440
+                else if (finalVideoUrl.contains("1080")) quality = 1080
+                else if (finalVideoUrl.contains("720")) quality = 720
+                else if (finalVideoUrl.contains("480")) quality = 480
                 
-                if (videoUrl.contains("2160") || videoUrl.contains("4k")) quality = 2160
-                else if (videoUrl.contains("1440")) quality = 1440
-                else if (videoUrl.contains("1080")) quality = 1080
-                else if (videoUrl.contains("720")) quality = 720
-                else if (videoUrl.contains("480")) quality = 480
-                
-                val title = if (mediaType == "filme") {
-                    "Filme $tmdbId"
-                } else {
-                    "S${targetSeason.toString().padStart(2, '0')}E${targetEpisode.toString().padStart(2, '0')}"
-                }
-                
-                val extractorLink = newExtractorLink(
-                    source = "SuperFlixAPI",
-                    name = "SuperFlixAPI $serverType",
-                    url = videoUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = baseUrl
-                    this.quality = quality
-                    this.headers = mapOf(
-                        "Referer" to baseUrl,
-                        "User-Agent" to HEADERS["User-Agent"]!!
-                    )
-                }
-                
-                results.add(extractorLink)
+                results.add(
+                    newExtractorLink(
+                        source = "SuperFlixAPI",
+                        name = "SuperFlixAPI $serverType",
+                        url = finalVideoUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = baseUrl
+                        this.quality = quality
+                        this.headers = mapOf(
+                            "Referer" to baseUrl,
+                            "User-Agent" to HEADERS["User-Agent"]!!
+                        )
+                    }
+                )
             }
             
             return results

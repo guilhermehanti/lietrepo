@@ -160,64 +160,64 @@ class PobreFlix : MainAPI() {
 
     
     override suspend fun search(query: String): List<SearchResponse> {
-    if (query.length < 2) return emptyList()
-    
-    val encodedQuery = URLEncoder.encode(query, "UTF-8")
-    val searchUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery"
-    
-    return try {
-        val document = app.get(searchUrl).document
-        document.select("article.group, .grid article, .group\\/card")
-            .mapNotNull { element ->
-                try {
-                    element.toSearchResult()
-                } catch (e: Exception) {
-                    null
-                }
-            }
-    } catch (e: Exception) {
-        emptyList()
-    }
-}
-
-override suspend fun search(query: String, page: Int): SearchResponseList? {
-    if (query.length < 2) return null
-    
-    val encodedQuery = URLEncoder.encode(query, "UTF-8")
-    val searchUrl = if (page > 1) {
-        "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=$page"
-    } else {
-        "$mainUrl$SEARCH_PATH?s=$encodedQuery"
-    }
-    
-    return try {
-        val document = app.get(searchUrl).document
-        val results = document.select("article.group, .grid article, .group\\/card")
-            .mapNotNull { element ->
-                try {
-                    element.toSearchResult()
-                } catch (e: Exception) {
-                    null
-                }
-            }
+        if (query.length < 2) return emptyList()
         
-        var hasNextPage = false
-        if (results.isNotEmpty()) {
-            val nextPageUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=${page + 1}"
-            try {
-                val nextPageDoc = app.get(nextPageUrl).document
-                val nextPageResults = nextPageDoc.select("article.group, .grid article, .group\\/card")
-                hasNextPage = nextPageResults.isNotEmpty()
-            } catch (e: Exception) {
-                hasNextPage = false
-            }
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val searchUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery"
+        
+        return try {
+            val document = app.get(searchUrl).document
+            document.select("article.group, .grid article, .group\\/card")
+                .mapNotNull { element ->
+                    try {
+                        element.toSearchResult()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        if (query.length < 2) return null
+        
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val searchUrl = if (page > 1) {
+            "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=$page"
+        } else {
+            "$mainUrl$SEARCH_PATH?s=$encodedQuery"
         }
         
-        results.toNewSearchResponseList(hasNextPage)
-    } catch (e: Exception) {
-        null
+        return try {
+            val document = app.get(searchUrl).document
+            val results = document.select("article.group, .grid article, .group\\/card")
+                .mapNotNull { element ->
+                    try {
+                        element.toSearchResult()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            
+            var hasNextPage = false
+            if (results.isNotEmpty()) {
+                val nextPageUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=${page + 1}"
+                try {
+                    val nextPageDoc = app.get(nextPageUrl).document
+                    val nextPageResults = nextPageDoc.select("article.group, .grid article, .group\\/card")
+                    hasNextPage = nextPageResults.isNotEmpty()
+                } catch (e: Exception) {
+                    hasNextPage = false
+                }
+            }
+            
+            results.toNewSearchResponseList(hasNextPage)
+        } catch (e: Exception) {
+            null
+        }
     }
-}
 
     override suspend fun load(url: String): LoadResponse? {
         try {
@@ -406,11 +406,11 @@ override suspend fun search(query: String, page: Int): SearchResponseList? {
                     } catch (e: Exception) { null }
                 }
             
-            val playerUrl = findPlayerUrl(document)
             val tmdbId = document.selectFirst("section[data-contentid]")?.attr("data-contentid")?.toIntOrNull()
             
             if (!isAnime && !isSerie) {
-                return newMovieLoadResponse(cleanTitle, url, TvType.Movie, playerUrl ?: url) {
+                // ATUALIZADO: Passar url no loadResponse para o CloudStream
+                return newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
                     this.posterUrl = poster
                     this.backgroundPosterUrl = backdrop
                     this.year = year
@@ -504,7 +504,8 @@ override suspend fun search(query: String, page: Int): SearchResponseList? {
                                 thumbUrl = backdropElement?.let { fixImageUrl(it) }
                             }
                             
-                            val episodeUrl = "$seriesUrl/$seasonNum/$epNum"
+                            // ATUALIZADO: Salva a URL da página do episódio
+                            val episodeUrl = "$seriesUrl/${seasonNum}x${epNum}".replace("/serie/", "/episodio/")
                             
                             episodes.add(newEpisode(fixUrl(episodeUrl)) {
                                 this.name = epTitle
@@ -514,6 +515,7 @@ override suspend fun search(query: String, page: Int): SearchResponseList? {
                                 this.description = sinopse
                                 this.runTime = durationMin
                                 if (airDate != null) this.addDate(airDate)
+                                // Metadados (opcional, só de apoio pro app)
                                 if (tmdbId != null) this.data = "$tmdbId|$seasonNum|$epNum"
                             })
                         }
@@ -526,6 +528,7 @@ override suspend fun search(query: String, page: Int): SearchResponseList? {
             } catch (e: Exception) { }
         }
 
+        // Fallback pra extrair de grid HTML caso o script json não exista
         val episodeElements = document.select("#episodes-list article")
         
         episodeElements.forEachIndexed { index, element ->
@@ -579,17 +582,11 @@ override suspend fun search(query: String, page: Int): SearchResponseList? {
                     this.description = sinopse
                     this.runTime = durationMin
                     if (airDate != null) this.addDate(airDate)
-                    if (tmdbId != null) this.data = "$tmdbId|1|$epNumber"
                 })
             } catch (e: Exception) { }
         }
         
         return episodes
-    }
-
-    private fun findPlayerUrl(document: org.jsoup.nodes.Document): String? {
-        val iframe = document.selectFirst("iframe[src*='player'], iframe[src*='embed'], iframe[src*='fembed'], iframe[src*='filemoon']")
-        return iframe?.attr("src")
     }
 
     override suspend fun loadLinks(
@@ -599,41 +596,30 @@ override suspend fun search(query: String, page: Int): SearchResponseList? {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val parts = data.split("|")
+            // ATUALIZADO: Puxamos sempre o HTML do episódio ou filme pra ter certeza
+            // de que mandamos os parâmetros corretos para a API do PobreFlixExtractor
             
-            if (parts.size == 3) {
-                val tmdbId = parts[0].toIntOrNull()
-                val season = parts[1].toIntOrNull() ?: 1
-                val episode = parts[2].toIntOrNull() ?: 1
-                
-                if (tmdbId == null) return false
-                
-                val streams = PobreFlixExtractor.getStreams(tmdbId, "serie", season, episode)
-                
-                if (streams.isEmpty()) return false
-                
-                streams.forEach { callback(it) }
-                true
+            val document = app.get(data).document
+            val playerContainer = document.selectFirst("#movie-player-container")
+            
+            if (playerContainer == null) return false
+
+            val tmdbId = playerContainer.attr("data-apicontentid").toIntOrNull() ?: return false
+            val playerType = playerContainer.attr("data-playertype").lowercase()
+            
+            val streams = if (playerType == "episodio") {
+                val season = playerContainer.attr("data-season").toIntOrNull() ?: 1
+                val episode = playerContainer.attr("data-episode").toIntOrNull() ?: 1
+                PobreFlixExtractor.getStreams(tmdbId, "serie", season, episode)
             } else {
-                val document = app.get(data).document
-                val urlPath = data.substringAfter(mainUrl).substringBefore("?")
-                
-                if (urlPath.contains("/filme/")) {
-                    val tmdbId = document.selectFirst("section[data-contentid]")?.attr("data-contentid")?.toIntOrNull()
-                        ?: document.selectFirst("#movie-player-container")?.attr("data-apicontentid")?.toIntOrNull()
-                    
-                    if (tmdbId == null) return false
-                    
-                    val streams = PobreFlixExtractor.getStreams(tmdbId, "filme", 1, 1)
-                    
-                    if (streams.isEmpty()) return false
-                    
-                    streams.forEach { callback(it) }
-                    true
-                } else {
-                    false
-                }
+                PobreFlixExtractor.getStreams(tmdbId, "filme", 1, 1)
             }
+            
+            if (streams.isEmpty()) return false
+            
+            streams.forEach { callback(it) }
+            true
+            
         } catch (e: Exception) {
             false
         }
