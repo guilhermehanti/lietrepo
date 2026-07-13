@@ -160,13 +160,20 @@ class PobreFlix : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.length < 2) return emptyList()
+        
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery"
         
         return try {
             val document = app.get(searchUrl).document
             document.select("article.group, .grid article, .group\\/card")
-                .mapNotNull { element -> try { element.toSearchResult() } catch (e: Exception) { null } }
+                .mapNotNull { element ->
+                    try {
+                        element.toSearchResult()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
         } catch (e: Exception) {
             emptyList()
         }
@@ -174,26 +181,41 @@ class PobreFlix : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         if (query.length < 2) return null
+        
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val searchUrl = if (page > 1) "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=$page" else "$mainUrl$SEARCH_PATH?s=$encodedQuery"
+        val searchUrl = if (page > 1) {
+            "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=$page"
+        } else {
+            "$mainUrl$SEARCH_PATH?s=$encodedQuery"
+        }
         
         return try {
             val document = app.get(searchUrl).document
             val results = document.select("article.group, .grid article, .group\\/card")
-                .mapNotNull { element -> try { element.toSearchResult() } catch (e: Exception) { null } }
+                .mapNotNull { element ->
+                    try {
+                        element.toSearchResult()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
             
             var hasNextPage = false
             if (results.isNotEmpty()) {
                 val nextPageUrl = "$mainUrl$SEARCH_PATH?s=$encodedQuery&page=${page + 1}"
                 try {
                     val nextPageDoc = app.get(nextPageUrl).document
-                    hasNextPage = nextPageDoc.select("article.group, .grid article, .group\\/card").isNotEmpty()
+                    val nextPageResults = nextPageDoc.select("article.group, .grid article, .group\\/card")
+                    hasNextPage = nextPageResults.isNotEmpty()
                 } catch (e: Exception) {
                     hasNextPage = false
                 }
             }
+            
             results.toNewSearchResponseList(hasNextPage)
-        } catch (e: Exception) { null }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -315,9 +337,11 @@ class PobreFlix : MainAPI() {
                     } catch (e: Exception) { null }
                 }
             
+            val playerUrl = findPlayerUrl(document)
             val tmdbId = document.selectFirst("section[data-contentid]")?.attr("data-contentid")?.toIntOrNull()
             
             if (!isAnime && !isSerie) {
+                // ATUALIZADO: Passar url no loadResponse para o CloudStream
                 return newMovieLoadResponse(cleanTitle, url, TvType.Movie, url) {
                     this.posterUrl = poster
                     this.backgroundPosterUrl = backdrop
@@ -411,6 +435,7 @@ class PobreFlix : MainAPI() {
                                 thumbUrl = backdropElement?.let { fixImageUrl(it) }
                             }
                             
+                            // ATUALIZADO: Salva a URL da página do episódio
                             val episodeUrl = "$seriesUrl/${seasonNum}x${epNum}".replace("/serie/", "/episodio/")
                             
                             episodes.add(newEpisode(fixUrl(episodeUrl)) {
@@ -482,11 +507,17 @@ class PobreFlix : MainAPI() {
                     this.description = sinopse
                     this.runTime = durationMin
                     if (airDate != null) this.addDate(airDate)
+                    if (tmdbId != null) this.data = "$tmdbId|1|$epNumber"
                 })
             } catch (e: Exception) { }
         }
         
         return episodes
+    }
+
+    private fun findPlayerUrl(document: org.jsoup.nodes.Document): String? {
+        val iframe = document.selectFirst("iframe[src*='player'], iframe[src*='embed'], iframe[src*='fembed'], iframe[src*='filemoon']")
+        return iframe?.attr("src")
     }
 
     override suspend fun loadLinks(
@@ -496,54 +527,29 @@ class PobreFlix : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            // Garante que o data é uma URL completa
-            val url = if (data.startsWith("http")) data else "$mainUrl$data"
-            val document = app.get(url).document
-            val playerContainer = document.selectFirst("#movie-player-container") ?: return false
+            // ATUALIZADO: Puxamos sempre o HTML do episódio ou filme pra ter certeza
+            // de que mandamos os parâmetros corretos para a API do PobreFlixExtractor
+            
+            val document = app.get(data).document
+            val playerContainer = document.selectFirst("#movie-player-container")
+            
+            if (playerContainer == null) return false
 
             val tmdbId = playerContainer.attr("data-apicontentid").toIntOrNull() ?: return false
-            val playerType = playerContainer.attr("data-playertype").lowercase().ifEmpty { "filme" }
-            val season = playerContainer.attr("data-season").toIntOrNull() ?: 1
-            val episode = playerContainer.attr("data-episode").toIntOrNull() ?: 1
+            val playerType = playerContainer.attr("data-playertype").lowercase()
             
-            // Busca os domínios de API dinamicamente para não falhar se derrubarem um
-            val scriptContent = document.html()
-            val apisMatch = Regex("""window\.__PLAYER_APIS__\s*=\s*\[(.*?)\]""").find(scriptContent)
-            val apis = mutableListOf<String>()
-            
-            if (apisMatch != null) {
-                apisMatch.groupValues[1].split(",").forEach {
-                    val cleanApi = it.replace("\"", "").replace("'", "").trim()
-                    if (cleanApi.isNotBlank()) apis.add(cleanApi)
-                }
+            val streams = if (playerType == "episodio") {
+                val season = playerContainer.attr("data-season").toIntOrNull() ?: 1
+                val episode = playerContainer.attr("data-episode").toIntOrNull() ?: 1
+                PobreFlixExtractor.getStreams(tmdbId, "serie", season, episode)
+            } else {
+                PobreFlixExtractor.getStreams(tmdbId, "filme", 1, 1)
             }
             
-            // Fallback caso a Regex não encontre nada
-            if (apis.isEmpty()) {
-                apis.add("warezcdn.lat")
-                apis.add("superflixapi.pro")
-            }
-
-            var foundLink = false
-            for (api in apis) {
-                val domain = if (api.startsWith("http")) api else "https://$api"
-                
-                val streams = PobreFlixExtractor.getStreams(
-                    initialDomain = domain,
-                    tmdbId = tmdbId,
-                    mediaType = if (playerType == "episodio") "serie" else "filme",
-                    season = season,
-                    episode = episode
-                )
-                
-                if (streams.isNotEmpty()) {
-                    streams.forEach { callback(it) }
-                    foundLink = true
-                    break // Se achou na primeira API, não perde tempo tentando a segunda
-                }
-            }
+            if (streams.isEmpty()) return false
             
-            return foundLink
+            streams.forEach { callback(it) }
+            true
             
         } catch (e: Exception) {
             false
