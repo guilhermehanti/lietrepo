@@ -64,6 +64,7 @@ class ReiDosEmbeds : MainAPI() {
             }
 
             if (agendaEvents.isNotEmpty()) {
+                agendaEvents.sortBy { if (it.name.contains("AO VIVO", ignoreCase = true)) 0 else 1 }
                 categories.add(HomePageList("Agenda (Ao Vivo e Em Breve)", agendaEvents, isHorizontalImages = true))
             }
         } catch (e: Exception) {
