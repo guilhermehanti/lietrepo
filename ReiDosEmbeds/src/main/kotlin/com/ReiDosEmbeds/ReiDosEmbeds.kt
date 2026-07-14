@@ -228,39 +228,6 @@ class ReiDosEmbeds : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        
-        // Se a requisição for da página individual do evento
-        if (data.contains("/eventos/")) {
-            val doc = app.get(data).document
-            
-            // Pega as opções de players na lateral da tela
-            val choices = doc.select(".player-choice[data-player-url]")
-            
-            if (choices.isNotEmpty()) {
-                coroutineScope {
-                    choices.map { choice ->
-                        async {
-                            val optUrl = choice.attr("data-player-url")
-                            val optName = choice.select(".block.truncate").text().trim()
-                            if (optUrl.isNotEmpty()) {
-                                // Aqui optUrl é a url do iframe (ex: v5.rde.lat/e/...). Resolvemos ele.
-                                resolvePlayer(optUrl, data, optName, callback)
-                            }
-                        }
-                    }.awaitAll()
-                }
-                return true
-            } else {
-                // Fallback: Tenta pegar o iframe exibido na tela principal caso a estrutura seja diferente
-                val mainIframe = doc.select("iframe#event-player-frame").attr("src")
-                if (mainIframe.isNotEmpty()) {
-                    resolvePlayer(mainIframe, data, "Principal", callback)
-                    return true
-                }
-            }
-        }
-
-        // Se for canal normal
         resolvePlayer(data, data, name, callback)
         return true
     }
