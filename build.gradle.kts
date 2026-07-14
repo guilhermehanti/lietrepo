@@ -7,7 +7,7 @@ buildscript {
     }
     dependencies {
         classpath("com.android.tools.build:gradle:8.7.3")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0") // Atualizado para versão estável
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
         classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
     }
 }
@@ -41,8 +41,7 @@ subprojects {
 
         defaultConfig {
             minSdk = 21
-            compileSdk = 35 // Sintaxe atualizada
-            // targetSdk = 35 (Removido para evitar o aviso de depreciação em libraries)
+            compileSdkVersion(35)
         }
 
         compileOptions {
@@ -57,7 +56,7 @@ subprojects {
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
                     "-Xno-receiver-assertions",
-                    "-Xskip-metadata-version-check" // Workaround para o erro de incompatibilidade
+                    "-Xskip-metadata-version-check"
                 )
             }
         }
