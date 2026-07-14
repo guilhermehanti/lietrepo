@@ -9,6 +9,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.json.JSONObject
 import org.json.JSONArray
+import java.net.URI
 
 @CloudstreamPlugin
 class ReiDosEmbedsProvider : BasePlugin() {
@@ -45,11 +46,11 @@ class ReiDosEmbeds : MainAPI() {
                 if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
                     val rawTitle = card.select("h3").text().trim()
                     
-                    // Adiciona a TAG diretamente no título para aparecer no card do Cloudstream
+                    // Adiciona a TAG diretamente no título para o card do Cloudstream
                     val title = "[$statusBadge] $rawTitle"
                     val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
                     
-                    // Pega o link real da página individual do evento
+                    // Pega o link real da página do evento apontado no botão "Abrir"
                     val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
                     
                     if (mainUrl.isNotEmpty()) {
@@ -142,7 +143,7 @@ class ReiDosEmbeds : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Se for um evento da agenda (tem "/eventos/" na URL)
+        // Se for um evento da agenda
         if (url.contains("/eventos/")) {
             val doc = app.get(url).document
             val title = doc.select("h1.event-glow-title").text().trim()
@@ -228,92 +229,111 @@ class ReiDosEmbeds : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // Lógica para raspar página individual de EVENTO
+        // Se a requisição for da página individual do evento
         if (data.contains("/eventos/")) {
             val doc = app.get(data).document
             
-            // Pega todos os links das opções de player na página individual
+            // Pega as opções de players na lateral da tela
             val choices = doc.select(".player-choice[data-player-url]")
             
-            coroutineScope {
-                choices.map { choice ->
-                    async {
-                        val optUrl = choice.attr("data-player-url")
-                        val optName = choice.select(".block.truncate").text().trim()
-                        if (optUrl.isNotEmpty()) {
-                            extractFromUrl(optUrl, optName, data, callback)
+            if (choices.isNotEmpty()) {
+                coroutineScope {
+                    choices.map { choice ->
+                        async {
+                            val optUrl = choice.attr("data-player-url")
+                            val optName = choice.select(".block.truncate").text().trim()
+                            if (optUrl.isNotEmpty()) {
+                                // Aqui optUrl é a url do iframe (ex: v5.rde.lat/e/...). Resolvemos ele.
+                                resolvePlayer(optUrl, data, optName, callback)
+                            }
                         }
-                    }
-                }.awaitAll()
-            }
-            
-            // Fallback se não encontrar os botões de escolha, tenta achar o iframe principal
-            if (choices.isEmpty()) {
-                val iframe = doc.select("iframe#event-player-frame").attr("src")
-                if (iframe.isNotEmpty()) {
-                    extractFromUrl(iframe, "Principal", data, callback)
+                    }.awaitAll()
+                }
+                return true
+            } else {
+                // Fallback: Tenta pegar o iframe exibido na tela principal caso a estrutura seja diferente
+                val mainIframe = doc.select("iframe#event-player-frame").attr("src")
+                if (mainIframe.isNotEmpty()) {
+                    resolvePlayer(mainIframe, data, "Principal", callback)
+                    return true
                 }
             }
-            return true
         }
 
-        // Lógica original para raspar os CANAIS normais (que vêm com link embed_url)
-        extractFromUrl(data, name, data, callback)
+        // Se for canal normal
+        resolvePlayer(data, data, name, callback)
         return true
     }
 
     /**
-     * Função auxiliar para ler tanto páginas que têm um iframe de `__play`
-     * quanto páginas de player que já possuem a lista `var sources`.
+     * Função recursiva que entra nos iframes de forma progressiva 
+     * até encontrar o payload contendo as fontes de vídeo.
      */
-    private suspend fun extractFromUrl(
-        url: String, 
+    private suspend fun resolvePlayer(
+        startUrl: String, 
+        initialReferer: String, 
         sourceName: String, 
-        referer: String, 
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val html = app.get(url, headers = mapOf("Referer" to referer)).text
-            var playerHtml = html
-            var playerUrl = url
+        var currentUrl = startUrl
+        var referer = initialReferer
 
-            // Checa se tem o iframe do __play por cima
-            val iframePattern = Regex("""<iframe[^>]*src="([^"]*__play[^"]*)"[^>]*>""")
-            val iframeMatch = iframePattern.find(html)
-            
-            if (iframeMatch != null) {
-                playerUrl = iframeMatch.groupValues[1].replace("&amp;", "&")
-                if (playerUrl.startsWith("//")) playerUrl = "https:$playerUrl"
-                playerHtml = app.get(playerUrl, headers = mapOf("Referer" to url)).text
-            }
+        // Limite de 3 "pulos" de iframe para impedir loop infinito
+        for (i in 0..2) {
+            try {
+                val currentHtml = app.get(currentUrl, headers = mapOf("Referer" to referer)).text
+                
+                // 1. Verifica se já chegamos no script final (player embutido)
+                val sourcesPattern = Regex("""var sources\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
+                val sourcesMatch = sourcesPattern.find(currentHtml)
+                
+                if (sourcesMatch != null) {
+                    val sourcesArray = JSONArray(sourcesMatch.groupValues[1])
+                    val uri = URI(currentUrl)
+                    val origin = "${uri.scheme}://${uri.host}"
 
-            // Procura a variável das fontes m3u8
-            val sourcesPattern = Regex("""var sources\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
-            val sourcesMatch = sourcesPattern.find(playerHtml)
-            
-            if (sourcesMatch != null) {
-                val sourcesArray = JSONArray(sourcesMatch.groupValues[1])
-                for (i in 0 until sourcesArray.length()) {
-                    val source = sourcesArray.getJSONObject(i)
-                    val streamUrl = source.getString("src").replace("\\/", "/")
-                    val label = source.optString("label", "Source ${i + 1}")
-                    
-                    val finalName = if (sourceName.isNotEmpty()) "$sourceName - $label" else label
-                    
-                    M3u8Helper.generateM3u8(
-                        finalName,
-                        streamUrl,
-                        playerUrl,
-                        headers = mapOf(
-                            "Referer" to playerUrl,
-                            "Origin" to "https://v2.rde.lat",
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
-                        )
-                    ).forEach(callback)
+                    for (j in 0 until sourcesArray.length()) {
+                        val source = sourcesArray.getJSONObject(j)
+                        val streamUrl = source.getString("src").replace("\\/", "/")
+                        val label = source.optString("label", "Source ${j + 1}")
+                        val finalName = if (sourceName.isNotEmpty()) "$sourceName - $label" else label
+                        
+                        M3u8Helper.generateM3u8(
+                            finalName,
+                            streamUrl,
+                            currentUrl,
+                            headers = mapOf(
+                                "Referer" to currentUrl,
+                                "Origin" to origin,
+                                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+                            )
+                        ).forEach(callback)
+                    }
+                    return // Player encontrado e processado, encerra a busca
                 }
+                
+                // 2. Se não encontrou as fontes, procura um iframe filho para navegar
+                // Prioridade 1: O iframe que contém "__play", usado nos canais
+                var iframeMatch = Regex("""<iframe[^>]*src="([^"]*__play[^"]*)"[^>]*>""").find(currentHtml)
+                
+                // Prioridade 2: Qualquer outro iframe genérico
+                if (iframeMatch == null) {
+                    iframeMatch = Regex("""<iframe[^>]*src="([^"]+)"[^>]*>""").find(currentHtml)
+                }
+                
+                if (iframeMatch != null) {
+                    var nextUrl = iframeMatch.groupValues[1].replace("&amp;", "&")
+                    if (nextUrl.startsWith("//")) nextUrl = "https:$nextUrl"
+                    
+                    referer = currentUrl
+                    currentUrl = nextUrl
+                } else {
+                    // Sem fontes de video e sem iframes; quebra o ciclo
+                    break
+                }
+            } catch (e: Exception) {
+                break
             }
-        } catch (e: Exception) {
-            // Caso dê erro em um link específico, ignora para não interromper a extração de outros players
         }
     }
 }
