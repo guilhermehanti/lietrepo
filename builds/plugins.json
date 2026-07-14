@@ -1,10 +1,10 @@
 [
     {
         "iconUrl": "https://animefire.io/img/icons/favicon-192x192.png",
-        "fileHash": "sha256-ebbc833dc3d475fcf66c27df858cac76ace7a04b4ba7a9797cfb5b040ffe85fc",
+        "fileHash": "sha256-7eb2452754f7e1efc4fb290bc24958022ea33daf7c634276076c44e82f8cdb7f",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 42078,
+        "fileSize": 38178,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -21,10 +21,10 @@
     },
     {
         "iconUrl": "https://www.anitube.news/wp-content/uploads/cropped-Favicon6-192x192.png",
-        "fileHash": "sha256-7d9bc0f8ad2cd986ec021d67ec83625a870af7a8a95a05e60430d379c331003f",
+        "fileHash": "sha256-62b37fad5c690f39b37d45f2cb642ce694f39e544674dd44be4f70d9444fe2c3",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 35476,
+        "fileSize": 31392,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -41,10 +41,10 @@
     },
     {
         "iconUrl": "https://cineagora.net/templates/cineagora/images/touch-icon-180x180.png",
-        "fileHash": "sha256-cc2ec5ee9f41aa2f9850d958953f3455d87a58e8b0ca43b15df92f84ef5af4a1",
+        "fileHash": "sha256-73de241c0ebfba0328c89343785f99e7d8ecd700230799d58f644760bf6ed474",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 66356,
+        "fileSize": 59525,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -63,10 +63,10 @@
     },
     {
         "iconUrl": "https://www.dattebayo-br.com/favicon.png",
-        "fileHash": "sha256-1494eee14531a69087839019ee25a4a4e3f5d27393b5ec2b6f216d6a96282b5c",
+        "fileHash": "sha256-373f81b14d68d41040b30ba3eb17f0e97bc337268a6f49308ae327a8d899a190",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 29424,
+        "fileSize": 25611,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -83,10 +83,10 @@
     },
     {
         "iconUrl": "https://www.doramogo.net/assets/doramogo/images/apple-touch-icon.webp?version=200.50.10",
-        "fileHash": "sha256-99237d88d844b9a8ce80066962d04fbd592258ea8dbdae50c5f1f1b2471b7d77",
+        "fileHash": "sha256-c8f7c00b4fcfcdf0e42570ee9e465351b3db180ba2ef4620bc10a8c5e18398a9",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 57358,
+        "fileSize": 52218,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -103,10 +103,10 @@
     },
     {
         "iconUrl": "https://embedtv.best/assets/icon.png",
-        "fileHash": "sha256-8a68a93b8507521234f7aefafc20ba1aa5d43c054e4b9314166efbf5f8a8fd37",
+        "fileHash": "sha256-969acc71fcaa2bf25ca0cb9839c56b05746aa4e88a505557a839e42d19873f7c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 15189,
+        "fileSize": 13562,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -123,10 +123,10 @@
     },
     {
         "iconUrl": "https://goyabu.io/wp-content/uploads/2025/12/cropped-goyabu-favicon-192x192.png",
-        "fileHash": "sha256-c344f38d8ce971c012675e3d9c62f3c8a93cd539d1eb2316929bbff3572341ce",
+        "fileHash": "sha256-608d0005f0c1d433c91850c2a381d5a45455319213ef2c8cdbc935ae151f5dd6",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 32632,
+        "fileSize": 30122,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -143,10 +143,10 @@
     },
     {
         "iconUrl": "https://mendigoflix.lol/assets/favicon.png",
-        "fileHash": "sha256-c599cbf9c246b8781be733eb84df3051cd70e8b966e959f4dbab1720d909c934",
+        "fileHash": "sha256-744b1ed6cbec87c5bd3456feec1328b341ef6633c0337d8485180bd68376bdb8",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 54361,
+        "fileSize": 50012,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -164,34 +164,11 @@
         "name": "MendigoFlix"
     },
     {
-        "iconUrl": "https://www.image2url.com/r2/default/images/1776018665375-eafe8c65-10f1-490c-9994-2f519402b6e3.png",
-        "fileHash": "sha256-cbfe6b54abc97bcb16c77535d1f14b32cc0d6e5856dc3fc07015305523aff855",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 44285,
-        "status": 1,
-        "language": "pt-br",
-        "authors": [
-            "lawlietbr"
-        ],
-        "tvTypes": [
-            "Movies",
-            "Series",
-            "Animes",
-            "AsianDrama"
-        ],
-        "version": 3,
-        "internalName": "PobreFlix",
-        "description": "PobreFlix, assistir online, filmes, s\u00e9ries, animes, doramas",
-        "url": "https://github.com/guilhermehanti/lietrepo/raw/refs/heads/main/builds/PobreFlix.cs3",
-        "name": "PobreFlix"
-    },
-    {
         "iconUrl": "https://www.image2url.com/r2/default/images/1776423716151-20e5aa74-a764-4d60-8575-0851d8ab37df.png",
-        "fileHash": "sha256-1ab8d2a0cd72a7f096b082dc9ed3a6f3f4848cda43fde58b9309e7eeb882ec82",
+        "fileHash": "sha256-48f56cf05f3564dba2fa0a3ba9584d60e8e80a031755f220200d4ca703131077",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 13477,
+        "fileSize": 16686,
         "status": 1,
         "language": "pt-br",
         "authors": [
@@ -208,10 +185,10 @@
     },
     {
         "iconUrl": "https://openclipart.org/image/2400px/svg_to_png/193323/-S.png",
-        "fileHash": "sha256-73401790506d47677e965160cb7e9f1f0d8075fd6228a4ab4436ea2cfe1e5c4c",
+        "fileHash": "sha256-7fed4206be78a64b0dcfb084739d2387295b9372455ffc805db4cfe350eeaea1",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 52909,
+        "fileSize": 49044,
         "status": 1,
         "language": "pt-br",
         "authors": [
