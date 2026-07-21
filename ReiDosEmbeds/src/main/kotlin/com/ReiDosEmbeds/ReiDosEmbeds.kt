@@ -29,7 +29,6 @@ class ReiDosEmbeds : MainAPI() {
     private val apiUrl = "https://reidosembeds.com/api"
     private val blockedCategories = listOf("Adulto", "adulto", "ADULTO")
 
-    // Headers para evitar bloqueios simples de bots
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept" to "application/json, text/plain, */*",
@@ -37,21 +36,26 @@ class ReiDosEmbeds : MainAPI() {
         "Referer" to "https://reidosembeds.com/"
     )
 
-    // O companion object mantém os dados salvos na RAM enquanto o app estiver aberto
     companion object {
+        // Cache estático das categorias e canais (Timer de 24 horas)
         private var cachedChannelCategories: List<HomePageList>? = null
         private val channelsCacheMap: MutableMap<String, Pair<String, String>> = mutableMapOf()
+        private var lastChannelsFetch: Long = 0L
+        private const val CHANNELS_CACHE_MS = 24 * 60 * 60 * 1000L // 24 horas em milissegundos
 
+        // Controle de cache da agenda (Timer de 15 minutos)
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
-        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L // 15 minutos
+        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L // 15 minutos em milissegundos
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homeCategories = mutableListOf<HomePageList>()
         val currentTime = System.currentTimeMillis()
 
-        // 1. Scraping da Agenda (com cache de 15 minutos)
+        // ==========================================
+        // 1. LÓGICA DA AGENDA (Atualiza a cada 15 min)
+        // ==========================================
         if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
             try {
                 val agendaDoc = app.get("https://reidosembeds.com/agenda", headers = defaultHeaders).document
@@ -61,7 +65,6 @@ class ReiDosEmbeds : MainAPI() {
                 for (card in eventCards) {
                     val statusBadge = card.select("div.absolute.right-2.top-2").text().trim()
                     
-                    // Filtrar apenas Ao Vivo e Em Breve
                     if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
                         val rawTitle = card.select("h3").text().trim()
                         val title = "[$statusBadge] $rawTitle"
@@ -86,38 +89,34 @@ class ReiDosEmbeds : MainAPI() {
                 }
                 
                 lastAgendaFetch = currentTime
-            } catch (e: Exception) {
-                // Falha na agenda, mantém o cache antigo se existir
-            }
+            } catch (e: Exception) {}
         }
         
         cachedAgenda?.let { homeCategories.add(it) }
 
-        // 2. Fetch Otimizado de Canais e Categorias (roda apenas 1x e salva na RAM)
-        if (cachedChannelCategories == null) {
+        // ==========================================
+        // 2. LÓGICA DOS CANAIS (Atualiza a cada 24 horas)
+        // ==========================================
+        if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
             try {
                 val categoriesList = mutableListOf<HomePageList>()
                 
-                // Requisita categorias (1 única requisição)
                 val categoriesResponse = app.get("$apiUrl/channels/categories", headers = defaultHeaders).text
                 val categoriesJson = JSONObject(categoriesResponse)
                 val categoriesArray = categoriesJson.getJSONArray("data")
                 
-                val categoryNameMap = mutableMapOf<String, String>()
-                val validCategoryIds = mutableListOf<String>()
+                // Pegamos os nomes válidos para manter a mesma ordem do site
+                val validCategoryNames = mutableListOf<String>()
                 
                 for (i in 0 until categoriesArray.length()) {
                     val cat = categoriesArray.getJSONObject(i)
-                    val catName = cat.getString("name")
-                    val catId = cat.getString("id")
+                    val catName = cat.getString("name").trim()
                     
-                    if (!blockedCategories.contains(catName)) {
-                        categoryNameMap[catId] = catName
-                        validCategoryIds.add(catId)
+                    if (!blockedCategories.contains(catName) && !validCategoryNames.contains(catName)) {
+                        validCategoryNames.add(catName)
                     }
                 }
 
-                // Requisita TODOS os canais de uma vez (1 única requisição em vez de um loop)
                 val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders).text
                 val allChannelsJson = JSONObject(allChannelsResponse)
                 val allChannelsArray = allChannelsJson.getJSONArray("data")
@@ -125,18 +124,24 @@ class ReiDosEmbeds : MainAPI() {
                 val allChannelsList = mutableListOf<SearchResponse>()
                 val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
 
+                // Limpa o map de cache de links antes de recarregar
+                channelsCacheMap.clear()
+
                 for (i in 0 until allChannelsArray.length()) {
                     val channel = allChannelsArray.getJSONObject(i)
                     val name = channel.getString("name")
                     val slug = channel.getString("id")
                     val embedUrl = channel.getString("embed_url")
-                    val logoUrl = channel.getString("logo_url")
-                    val catId = channel.optString("category", "") 
+                    val logoUrl = channel.optString("logo_url", "")
+                    
+                    // Aqui estava o problema: o JSON retorna o NOME da categoria, não o ID
+                    val catName = channel.optString("category", "").trim()
+                    
+                    if (blockedCategories.contains(catName)) continue
                     
                     var posterUrl = logoUrl
                     if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                     
-                    // Salva no map global para a função load()
                     channelsCacheMap[slug] = Pair(name, posterUrl)
                     
                     val searchResponse = newLiveSearchResponse(name, embedUrl, TvType.Live) {
@@ -145,9 +150,8 @@ class ReiDosEmbeds : MainAPI() {
                     
                     allChannelsList.add(searchResponse)
                     
-                    // Agrupa canais localmente sem fazer novas requisições web
-                    if (validCategoryIds.contains(catId)) {
-                        val catName = categoryNameMap[catId] ?: "Outros"
+                    // Agrupa pelo nome da categoria
+                    if (catName.isNotEmpty()) {
                         if (!groupedChannels.containsKey(catName)) {
                             groupedChannels[catName] = mutableListOf()
                         }
@@ -159,17 +163,25 @@ class ReiDosEmbeds : MainAPI() {
                     categoriesList.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
                 }
                 
+                // Adiciona as categorias na exata ordem do site original
+                for (catName in validCategoryNames) {
+                    val channels = groupedChannels[catName]
+                    if (channels != null && channels.isNotEmpty()) {
+                        categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
+                    }
+                }
+                
+                // Adiciona qualquer categoria extra que possa ter vindo nos canais mas não na lista principal
                 for ((catName, channels) in groupedChannels) {
-                    if (channels.isNotEmpty()) {
+                    if (!validCategoryNames.contains(catName) && channels.isNotEmpty()) {
                         categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
                     }
                 }
                 
                 cachedChannelCategories = categoriesList
+                lastChannelsFetch = currentTime
                 
-            } catch (e: Exception) {
-                // Em caso de erro 429, a variável continua nula e ele tenta na próxima vez
-            }
+            } catch (e: Exception) {}
         }
         
         cachedChannelCategories?.let { homeCategories.addAll(it) }
@@ -178,7 +190,6 @@ class ReiDosEmbeds : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Se for um evento da agenda
         if (url.contains("/eventos/")) {
             val doc = app.get(url, headers = defaultHeaders).document
             val title = doc.select("h1.event-glow-title").text().trim()
@@ -192,7 +203,6 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Lógica para canais normais
         val slug = url.substringAfterLast("/")
         val channelData = channelsCacheMap[slug]
         val title = channelData?.first ?: slug.replace("-", " ").split(" ").joinToString(" ") { word ->
