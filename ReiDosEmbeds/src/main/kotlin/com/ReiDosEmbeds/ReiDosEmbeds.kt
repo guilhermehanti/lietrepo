@@ -27,7 +27,6 @@ class ReiDosEmbeds : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
 
     private val apiUrl = "https://reidosembeds.com/api"
-    private val blockedCategories = listOf("Adulto", "adulto", "ADULTO")
 
     // Headers para evitar bloqueios simples de bots
     private val defaultHeaders = mapOf(
@@ -48,15 +47,11 @@ class ReiDosEmbeds : MainAPI() {
             var currentPage = 1
             var keepFetching = true
             
-            // Varre as páginas sequencialmente (com limite de segurança de 10 páginas)
             while (keepFetching && currentPage <= 10) {
                 val pageUrl = "https://reidosembeds.com/agenda?status=all&page=$currentPage"
-                
-                // cacheTime = 15 salva a resposta de cada página no disco por 15 minutos
                 val agendaDoc = app.get(pageUrl, headers = defaultHeaders, cacheTime = 15).document
                 val eventCards = agendaDoc.select("article[data-event-card]")
                 
-                // Se não houver mais cards, chegamos ao final da lista e interrompemos
                 if (eventCards.isEmpty()) break
                 
                 var foundValidEventOnPage = false
@@ -81,8 +76,6 @@ class ReiDosEmbeds : MainAPI() {
                     }
                 }
                 
-                // LÓGICA INTELIGENTE: Se a página varrida não tinha NENHUM evento "Ao Vivo" ou "Em Breve",
-                // isso significa que só restam eventos finalizados nas próximas páginas. Então, paramos!
                 if (!foundValidEventOnPage) {
                     keepFetching = false
                 } else {
@@ -91,7 +84,6 @@ class ReiDosEmbeds : MainAPI() {
             }
 
             if (agendaEvents.isNotEmpty()) {
-                // A lógica de ordenação oficial é mantida: Os Ao Vivo primeiro, os Em Breve depois.
                 agendaEvents.sortBy { if (it.name.contains("AO VIVO", ignoreCase = true)) 0 else 1 }
                 homeCategories.add(HomePageList("Agenda (Ao Vivo e Em Breve)", agendaEvents, isHorizontalImages = true))
             }
@@ -101,69 +93,73 @@ class ReiDosEmbeds : MainAPI() {
         // 2. LÓGICA DOS CANAIS (Cache Nativo de 24 Horas)
         // ==========================================
         try {
-            // cacheTime = 1440 salva a resposta no disco do celular por 24 horas
+            // Voltamos para a lógica original do site para garantir 100% de precisão nos canais
+            // O cacheTime=1440 vai impedir que dê "Too Many Requests", pois as requisições ocorrerão APENAS 1 vez por dia!
             val categoriesResponse = app.get("$apiUrl/channels/categories", headers = defaultHeaders, cacheTime = 1440).text
             val categoriesJson = JSONObject(categoriesResponse)
             val categoriesArray = categoriesJson.getJSONArray("data")
             
-            val validCategoryNames = mutableListOf<String>()
-            
             for (i in 0 until categoriesArray.length()) {
-                val catName = categoriesArray.getJSONObject(i).getString("name")
-                if (!blockedCategories.contains(catName)) {
-                    validCategoryNames.add(catName)
+                val category = categoriesArray.getJSONObject(i)
+                val categoryName = category.getString("name")
+                val categoryId = category.getString("id")
+                
+                // Bloqueios de categoria foram removidos aqui para aparecerem Animes, Adulto, etc.
+                
+                val channelsResponse = app.get("$apiUrl/channels?category=${categoryId.replace(" ", "%20")}", headers = defaultHeaders, cacheTime = 1440).text
+                val channelsJson = JSONObject(channelsResponse)
+                val channelsArray = channelsJson.getJSONArray("data")
+                
+                val channels = mutableListOf<SearchResponse>()
+                
+                for (j in 0 until channelsArray.length()) {
+                    val channel = channelsArray.getJSONObject(j)
+                    val name = channel.getString("name")
+                    val slug = channel.getString("id")
+                    
+                    var posterUrl = channel.optString("logo_url", "")
+                    if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+                    
+                    val channelUrl = "https://reidosembeds.com/canal/$slug"
+                    
+                    channels.add(
+                        newLiveSearchResponse(name, channelUrl, TvType.Live) {
+                            this.posterUrl = posterUrl
+                        }
+                    )
+                }
+                
+                if (channels.isNotEmpty()) {
+                    homeCategories.add(HomePageList(categoryName, channels, isHorizontalImages = true))
                 }
             }
 
-            // Lê do disco se estiver no prazo de 24h
+            // Categoria "Todos"
             val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
             val allChannelsJson = JSONObject(allChannelsResponse)
             val allChannelsArray = allChannelsJson.getJSONArray("data")
             
             val allChannelsList = mutableListOf<SearchResponse>()
-            val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
 
             for (i in 0 until allChannelsArray.length()) {
                 val channel = allChannelsArray.getJSONObject(i)
                 val name = channel.getString("name")
                 val slug = channel.getString("id")
-                val catName = channel.optString("category", "Outros") 
-                
-                if (blockedCategories.contains(catName)) continue
                 
                 var posterUrl = channel.optString("logo_url", "")
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
-                // Transforma o slug em uma URL válida para não quebrar a interface do Cloudstream (NONE/NONE bug)
                 val channelUrl = "https://reidosembeds.com/canal/$slug"
                 
-                val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
-                    this.posterUrl = posterUrl
-                }
-                
-                allChannelsList.add(searchResponse)
-                
-                if (!groupedChannels.containsKey(catName)) {
-                    groupedChannels[catName] = mutableListOf()
-                }
-                groupedChannels[catName]?.add(searchResponse)
+                allChannelsList.add(
+                    newLiveSearchResponse(name, channelUrl, TvType.Live) {
+                        this.posterUrl = posterUrl
+                    }
+                )
             }
 
             if (allChannelsList.isNotEmpty()) {
-                homeCategories.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
-            }
-            
-            for (catName in validCategoryNames) {
-                val channels = groupedChannels[catName]
-                if (channels != null && channels.isNotEmpty()) {
-                    homeCategories.add(HomePageList(catName, channels, isHorizontalImages = true))
-                }
-            }
-            
-            for ((catName, channels) in groupedChannels) {
-                if (!validCategoryNames.contains(catName) && channels.isNotEmpty()) {
-                    homeCategories.add(HomePageList(catName, channels, isHorizontalImages = true))
-                }
+                homeCategories.add(0, HomePageList("Todos", allChannelsList, isHorizontalImages = true))
             }
         } catch (e: Exception) {}
 
@@ -207,7 +203,6 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
         
-        // Retornamos embedUrl no parâmetro 'dataUrl' para o loadLinks conseguir extrair o vídeo
         return newMovieLoadResponse(title, url, TvType.Live, embedUrl) {
             this.posterUrl = posterUrl
             this.plot = "Assista $title ao vivo!"
@@ -228,14 +223,10 @@ class ReiDosEmbeds : MainAPI() {
                 val name = channel.getString("name")
                 val slug = channel.getString("id")
                 val logoUrl = channel.optString("logo_url", "")
-                val category = channel.optString("category", "")
-                
-                if (blockedCategories.contains(category)) continue
                 
                 var posterUrl = logoUrl
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
-                // Fantasia a url na busca também
                 val channelUrl = "https://reidosembeds.com/canal/$slug"
                 
                 results.add(
