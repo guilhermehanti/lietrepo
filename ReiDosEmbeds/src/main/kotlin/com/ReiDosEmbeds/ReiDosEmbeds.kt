@@ -111,8 +111,10 @@ class ReiDosEmbeds : MainAPI() {
                 var posterUrl = channel.optString("logo_url", "")
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
-                // Passamos o 'slug' como URL no construtor para encontrarmos na hora de dar load()
-                val searchResponse = newLiveSearchResponse(name, slug, TvType.Live) {
+                // FIX: Transformar o slug em uma URL válida para o Cloudstream não bugar a interface
+                val channelUrl = "https://reidosembeds.com/canal/$slug"
+                
+                val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
                     this.posterUrl = posterUrl
                 }
                 
@@ -160,19 +162,20 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Se for um canal normal (onde a variável url guarda o 'slug' do canal)
+        // Se for um canal normal
+        val slug = url.substringAfterLast("/")
         // Isso lê o arquivo JSON direto do cache de disco, sem bater no servidor (0 milissegundos)
         val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
         val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
         
-        var title = url
+        var title = slug.replace("-", " ").replaceFirstChar { it.uppercase() }
         var embedUrl = url
         var posterUrl = ""
         
         // Busca os detalhes do canal usando o slug
         for (i in 0 until channelsArray.length()) {
             val channel = channelsArray.getJSONObject(i)
-            if (channel.getString("id") == url) {
+            if (channel.getString("id") == slug) {
                 title = channel.getString("name")
                 embedUrl = channel.getString("embed_url")
                 posterUrl = channel.optString("logo_url", "")
@@ -209,8 +212,11 @@ class ReiDosEmbeds : MainAPI() {
                 var posterUrl = logoUrl
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
+                // FIX: Mesma correção da home para a pesquisa
+                val channelUrl = "https://reidosembeds.com/canal/$slug"
+                
                 results.add(
-                    newLiveSearchResponse(name, slug, TvType.Live) {
+                    newLiveSearchResponse(name, channelUrl, TvType.Live) {
                         this.posterUrl = posterUrl
                     }
                 )
@@ -227,7 +233,7 @@ class ReiDosEmbeds : MainAPI() {
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
                 if (embeds.length() > 0) {
-                    val embedUrl = embeds.getJSONObject(0).getString("embed_url") // Eventos da pesquisa ainda trazem o embedUrl
+                    val embedUrl = embeds.getJSONObject(0).getString("embed_url") 
                     results.add(
                         newLiveSearchResponse(title, embedUrl, TvType.Live) {
                             this.posterUrl = posterUrl
