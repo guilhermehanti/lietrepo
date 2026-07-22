@@ -41,34 +41,57 @@ class ReiDosEmbeds : MainAPI() {
         val homeCategories = mutableListOf<HomePageList>()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Cache Nativo de 15 Minutos)
+        // 1. LÓGICA DA AGENDA (Paginação Dinâmica e Cache Nativo de 15 Min)
         // ==========================================
         try {
-            // cacheTime = 15 salva a resposta no disco do celular por 15 minutos
-            val agendaDoc = app.get("https://reidosembeds.com/agenda", headers = defaultHeaders, cacheTime = 15).document
             val agendaEvents = mutableListOf<SearchResponse>()
-            val eventCards = agendaDoc.select("article[data-event-card]")
+            var currentPage = 1
+            var keepFetching = true
             
-            for (card in eventCards) {
-                val statusBadge = card.select("div.absolute.right-2.top-2").text().trim()
+            // Varre as páginas sequencialmente (com limite de segurança de 10 páginas)
+            while (keepFetching && currentPage <= 10) {
+                val pageUrl = "https://reidosembeds.com/agenda?status=all&page=$currentPage"
                 
-                if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
-                    val rawTitle = card.select("h3").text().trim()
-                    val title = "[$statusBadge] $rawTitle"
-                    val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
-                    val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
+                // cacheTime = 15 salva a resposta de cada página no disco por 15 minutos
+                val agendaDoc = app.get(pageUrl, headers = defaultHeaders, cacheTime = 15).document
+                val eventCards = agendaDoc.select("article[data-event-card]")
+                
+                // Se não houver mais cards, chegamos ao final da lista e interrompemos
+                if (eventCards.isEmpty()) break
+                
+                var foundValidEventOnPage = false
+                
+                for (card in eventCards) {
+                    val statusBadge = card.select("div.absolute.right-2.top-2").text().trim()
                     
-                    if (mainUrl.isNotEmpty()) {
-                        agendaEvents.add(
-                            newLiveSearchResponse(title, mainUrl, TvType.Live) {
-                                this.posterUrl = posterUrl
-                            }
-                        )
+                    if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
+                        foundValidEventOnPage = true
+                        val rawTitle = card.select("h3").text().trim()
+                        val title = "[$statusBadge] $rawTitle"
+                        val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
+                        val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
+                        
+                        if (mainUrl.isNotEmpty()) {
+                            agendaEvents.add(
+                                newLiveSearchResponse(title, mainUrl, TvType.Live) {
+                                    this.posterUrl = posterUrl
+                                }
+                            )
+                        }
                     }
+                }
+                
+                // LÓGICA INTELIGENTE: Se a página varrida não tinha NENHUM evento "Ao Vivo" ou "Em Breve",
+                // isso significa que só restam eventos finalizados nas próximas páginas. Então, paramos!
+                if (!foundValidEventOnPage) {
+                    keepFetching = false
+                } else {
+                    currentPage++
                 }
             }
 
             if (agendaEvents.isNotEmpty()) {
+                // A lógica de ordenação oficial é mantida: Os Ao Vivo primeiro, os Em Breve depois.
                 agendaEvents.sortBy { if (it.name.contains("AO VIVO", ignoreCase = true)) 0 else 1 }
                 homeCategories.add(HomePageList("Agenda (Ao Vivo e Em Breve)", agendaEvents, isHorizontalImages = true))
             }
@@ -78,7 +101,7 @@ class ReiDosEmbeds : MainAPI() {
         // 2. LÓGICA DOS CANAIS (Cache Nativo de 24 Horas)
         // ==========================================
         try {
-            // cacheTime = 1440 salva a resposta no disco do celular por 24 horas!
+            // cacheTime = 1440 salva a resposta no disco do celular por 24 horas
             val categoriesResponse = app.get("$apiUrl/channels/categories", headers = defaultHeaders, cacheTime = 1440).text
             val categoriesJson = JSONObject(categoriesResponse)
             val categoriesArray = categoriesJson.getJSONArray("data")
@@ -111,7 +134,7 @@ class ReiDosEmbeds : MainAPI() {
                 var posterUrl = channel.optString("logo_url", "")
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
-                // FIX: Transformar o slug em uma URL válida para o Cloudstream não bugar a interface
+                // Transforma o slug em uma URL válida para não quebrar a interface do Cloudstream (NONE/NONE bug)
                 val channelUrl = "https://reidosembeds.com/canal/$slug"
                 
                 val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
@@ -162,9 +185,9 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Se for um canal normal
+        // Se for um canal normal (onde a variável url guarda a url fantasiada)
         val slug = url.substringAfterLast("/")
-        // Isso lê o arquivo JSON direto do cache de disco, sem bater no servidor (0 milissegundos)
+        // Lê o arquivo JSON direto do cache de disco, sem bater no servidor (0 milissegundos)
         val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
         val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
         
@@ -172,7 +195,7 @@ class ReiDosEmbeds : MainAPI() {
         var embedUrl = url
         var posterUrl = ""
         
-        // Busca os detalhes do canal usando o slug
+        // Busca os detalhes do canal usando o slug interceptado
         for (i in 0 until channelsArray.length()) {
             val channel = channelsArray.getJSONObject(i)
             if (channel.getString("id") == slug) {
@@ -212,7 +235,7 @@ class ReiDosEmbeds : MainAPI() {
                 var posterUrl = logoUrl
                 if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                 
-                // FIX: Mesma correção da home para a pesquisa
+                // Fantasia a url na busca também
                 val channelUrl = "https://reidosembeds.com/canal/$slug"
                 
                 results.add(
