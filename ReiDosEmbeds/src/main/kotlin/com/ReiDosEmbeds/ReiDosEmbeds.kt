@@ -19,6 +19,7 @@ class ReiDosEmbedsProvider : BasePlugin() {
     }
 }
 
+// Classe de dados temporária para ajudar na ordenação da agenda por cronologia
 private data class TempAgendaEvent(
     val title: String,
     val url: String,
@@ -39,6 +40,7 @@ class ReiDosEmbeds : MainAPI() {
 
     private val apiUrl = "https://reidosembeds.com/api"
 
+    // Headers para evitar bloqueios simples de bots
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept" to "application/json, text/plain, */*",
@@ -50,11 +52,11 @@ class ReiDosEmbeds : MainAPI() {
         private var cachedChannelCategories: List<HomePageList>? = null
         private val channelsCacheMap = ConcurrentHashMap<String, Pair<String, String>>()
         private var lastChannelsFetch: Long = 0L
-        private const val CHANNELS_CACHE_MS = 24 * 60 * 60 * 1000L 
+        private const val CHANNELS_CACHE_MS = 24 * 60 * 60 * 1000L // 24 horas
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
-        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L 
+        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L // 15 minutos
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -62,7 +64,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA 
+        // 1. LÓGICA DA AGENDA (Intacta com Horários)
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -160,14 +162,20 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (COM TELA DE DEBUG)
+        // 2. LÓGICA DOS CANAIS (Tradutor Local + Quebra de Cache Envenenado)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
                 val categoriesList = mutableListOf<HomePageList>()
                 
-                val categoriesResponse = app.get("$apiUrl/channels/categories", headers = defaultHeaders, cacheTime = 1440).text
-                val categoriesArray = JSONObject(categoriesResponse).getJSONArray("data")
+                // O parâmetro ?v=2 engana o celular e força ele a ignorar o erro que estava salvo
+                val categoriesResponse = app.get("$apiUrl/channels/categories?v=2", headers = defaultHeaders, cacheTime = 1440).text
+                val categoriesJson = JSONObject(categoriesResponse)
+                
+                // Trava de segurança para não salvar erro novamente se o site cair no exato instante do click
+                if (!categoriesJson.has("data")) throw Exception("O site retornou um formato inesperado ao invés das categorias.")
+                
+                val categoriesArray = categoriesJson.getJSONArray("data")
                 
                 val categoryMap = mutableMapOf<String, String>()
                 for (i in 0 until categoriesArray.length()) {
@@ -178,8 +186,13 @@ class ReiDosEmbeds : MainAPI() {
                     categoryMap[id.lowercase()] = name 
                 }
 
-                val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
-                val allChannelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
+                // O parâmetro ?v=2 aqui faz a mesma quebra de cache para a lista global
+                val allChannelsResponse = app.get("$apiUrl/channels?v=2", headers = defaultHeaders, cacheTime = 1440).text
+                val allChannelsJson = JSONObject(allChannelsResponse)
+                
+                if (!allChannelsJson.has("data")) throw Exception("O site retornou um formato inesperado ao invés dos canais.")
+                
+                val allChannelsArray = allChannelsJson.getJSONArray("data")
                 
                 val allChannelsList = mutableListOf<SearchResponse>()
                 val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
@@ -250,10 +263,7 @@ class ReiDosEmbeds : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            // ==========================================
-            // SEÇÃO HACKER DE DEBUG: MOSTRA O ERRO NA TELA
-            // ==========================================
-            val errorMsg = e.toString().take(150) // Pega as primeiras 150 letras do erro técnico
+            val errorMsg = e.toString().take(150) 
             val errorItem = newLiveSearchResponse(errorMsg, "https://reidosembeds.com", TvType.Live) {
                 this.posterUrl = "https://via.placeholder.com/300x450.png?text=ERRO+API"
             }
@@ -292,7 +302,8 @@ class ReiDosEmbeds : MainAPI() {
         }
 
         try {
-            val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
+            // Utilizamos v=2 aqui também para nos aproveitarmos do cache correto da página inicial!
+            val allChannelsResponse = app.get("$apiUrl/channels?v=2", headers = defaultHeaders, cacheTime = 1440).text
             val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
             for (i in 0 until channelsArray.length()) {
                 val channel = channelsArray.getJSONObject(i)
@@ -393,7 +404,8 @@ class ReiDosEmbeds : MainAPI() {
 
         val slug = data.substringAfterLast("/")
         try {
-            val response = app.get("$apiUrl/channels?category=all", headers = defaultHeaders, cacheTime = 1440).text
+            // Buscando os embeds no cache recém limpado usando o v=2
+            val response = app.get("$apiUrl/channels?v=2", headers = defaultHeaders, cacheTime = 1440).text
             val channelsArray = JSONObject(response).getJSONArray("data")
             for (i in 0 until channelsArray.length()) {
                 val channel = channelsArray.getJSONObject(i)
