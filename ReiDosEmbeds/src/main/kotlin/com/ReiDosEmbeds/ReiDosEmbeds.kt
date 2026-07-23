@@ -19,13 +19,15 @@ class ReiDosEmbedsProvider : BasePlugin() {
     }
 }
 
-// Classe de dados temporária para ajudar na ordenação da agenda
+// Classe de dados temporária para ajudar na ordenação da agenda por cronologia
 private data class TempAgendaEvent(
     val title: String,
     val url: String,
     val posterUrl: String,
     val isLive: Boolean,
-    val isBrazilian: Boolean
+    val timeStr: String,
+    val sortKey: String,
+    val statusBadge: String
 )
 
 class ReiDosEmbeds : MainAPI() {
@@ -46,19 +48,6 @@ class ReiDosEmbeds : MainAPI() {
         "Referer" to "https://reidosembeds.com/"
     )
 
-    private val brazilianKeywords = listOf(
-        "brasileir", "série a", "série b", "série c", "série d", "copa do brasil", "paulistão", "carioca", 
-        "mineiro", "gaúcho", "copa do nordeste", "copa verde", "baiano", "pernambucano", "cearense",
-        "flamengo", "corinthians", "palmeiras", "são paulo", "vasco", "cruzeiro",
-        "grêmio", "internacional", "atlético-mg", "fluminense", "botafogo", "santos",
-        "bahia", "vitória", "fortaleza", "ceará", "sport", "athletico", "bragantino", "juventude", "criciúma", "atlético-go", "cuiabá",
-        "coritiba", "goiás", "américa-mg", "guarani", "vila nova", "ponte preta", "novorizontino",
-        "crb", "avaí", "chapecoense", "ituano", "operário", "mirassol", "paysandu", "amazonas", "botafogo-sp",
-        "náutico", "figueirense", "csa", "sampaio corrêa", "londrina", "tombense", "abc", "volta redonda",
-        "confiança", "ferroviário", "ypiranga", "são bernardo", "floresta", "botafogo-pb", "caxias", "remo", 
-        "santa cruz", "paraná", "joinville", "campinense", "treze", "brasil de pelotas"
-    )
-
     companion object {
         // Cache em memória para evitar travamentos de UI
         private var cachedChannelCategories: List<HomePageList>? = null
@@ -77,7 +66,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Paginação Dinâmica e Cache de 15 Min)
+        // 1. LÓGICA DA AGENDA (Paginação Dinâmica + Ordenação Cronológica)
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -101,18 +90,45 @@ class ReiDosEmbeds : MainAPI() {
                             foundValidEventOnPage = true
                             
                             val rawTitle = card.select("h3").text().trim()
-                            val league = card.select("span.text-zinc-400").text().trim() 
                             val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
                             val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
                             
-                            val title = "[$statusBadge] $rawTitle"
-                            val searchString = "$title - $league"
+                            // Lógica para extrair Data e Hora reais do HTML para uso no título e na ordenação
+                            var eventDate = ""
+                            var eventTime = ""
+                            
+                            val timeElements = card.select("span.inline-flex.items-center")
+                            for (el in timeElements) {
+                                val text = el.text().trim()
+                                
+                                val timeMatch = Regex("\\b\\d{2}:\\d{2}\\b").find(text)
+                                if (timeMatch != null) {
+                                    eventTime = timeMatch.value
+                                }
+                                
+                                val dateMatch = Regex("\\b\\d{2}/\\d{2}/\\d{4}\\b").find(text)
+                                if (dateMatch != null) {
+                                    val parts = dateMatch.value.split("/")
+                                    if (parts.size == 3) {
+                                        // Formato YYYYMMDD para ordenação alfanumérica perfeita
+                                        eventDate = "${parts[2]}${parts[1]}${parts[0]}" 
+                                    }
+                                }
+                            }
+                            
+                            // Criação de uma chave de ordenação. Ex: 202607232240
+                            val sortKey = if (eventDate.isNotEmpty() && eventTime.isNotEmpty()) {
+                                "${eventDate}${eventTime}"
+                            } else if (eventTime.isNotEmpty()) {
+                                "99999999${eventTime}"
+                            } else {
+                                "9999999999:99"
+                            }
                             
                             val isLive = statusBadge.equals("AO VIVO", ignoreCase = true)
-                            val isBrazilian = brazilianKeywords.any { kw -> searchString.contains(kw, ignoreCase = true) }
                             
                             if (mainUrl.isNotEmpty()) {
-                                tempAgendaEvents.add(TempAgendaEvent(title, mainUrl, posterUrl, isLive, isBrazilian))
+                                tempAgendaEvents.add(TempAgendaEvent(rawTitle, mainUrl, posterUrl, isLive, eventTime, sortKey, statusBadge))
                             }
                         }
                     }
@@ -125,13 +141,18 @@ class ReiDosEmbeds : MainAPI() {
                 }
 
                 if (tempAgendaEvents.isNotEmpty()) {
+                    // Ordenação priorizando o Ao Vivo e, em seguida, pelo horário que vai começar
                     tempAgendaEvents.sortWith(compareBy(
                         { !it.isLive },
-                        { !it.isBrazilian }
+                        { it.sortKey }
                     ))
                     
+                    // Transforma os objetos temporários em SearchResponses do Cloudstream
                     val agendaEvents = tempAgendaEvents.map { event ->
-                        newLiveSearchResponse(event.title, event.url, TvType.Live) {
+                        val prefix = if (event.timeStr.isNotEmpty()) "[${event.statusBadge} - ${event.timeStr}]" else "[${event.statusBadge}]"
+                        val fullTitle = "$prefix ${event.title}"
+                        
+                        newLiveSearchResponse(fullTitle, event.url, TvType.Live) {
                             this.posterUrl = event.posterUrl
                         }
                     }
@@ -359,7 +380,6 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Recuperar o link de embed original
         val slug = data.substringAfterLast("/")
         try {
             val response = app.get("$apiUrl/channels?category=all", headers = defaultHeaders, cacheTime = 1440).text
@@ -374,12 +394,10 @@ class ReiDosEmbeds : MainAPI() {
             }
         } catch (e: Exception) {}
 
-        // Se falhou em buscar na API completa, tenta usar a string bruta
         resolvePlayer(data, data, name, subtitleCallback, callback)
         return true
     }
 
-    // A MÁGICA ACONTECE AQUI: Adicionado subtitleCallback nos parâmetros para podermos usar o loadExtractor nativo
     private suspend fun resolvePlayer(
         startUrl: String, 
         initialReferer: String, 
@@ -392,13 +410,11 @@ class ReiDosEmbeds : MainAPI() {
 
         for (i in 0..2) {
             try {
-                // 1. Delegação Nativa: O Cloudstream sabe abrir YouTube e Twitch sozinho!
                 if (currentUrl.contains("youtube.com") || currentUrl.contains("youtu.be") || currentUrl.contains("twitch.tv")) {
                     loadExtractor(currentUrl, subtitleCallback, callback)
                     return
                 }
 
-                // Proteção extra de headers na raspagem de vídeo
                 val reqHeaders = mapOf(
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -407,7 +423,6 @@ class ReiDosEmbeds : MainAPI() {
 
                 val currentHtml = app.get(currentUrl, headers = reqHeaders).text
                 
-                // 2. Tenta extrair o player padrão
                 val sourcesPattern = Regex("""var sources\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
                 val sourcesMatch = sourcesPattern.find(currentHtml)
                 
@@ -436,7 +451,6 @@ class ReiDosEmbeds : MainAPI() {
                     return 
                 }
                 
-                // 3. Procura por sub-iframes (agora englobando youtube e twitch nas regex também)
                 var iframeMatch = Regex("""<iframe[^>]*src="([^"]*(?:rde\.lat|play|embed|youtube|twitch)[^"]*)"[^>]*>""").find(currentHtml)
                 if (iframeMatch == null) {
                     iframeMatch = Regex("""<iframe[^>]*src="([^"]+)"[^>]*>""").find(currentHtml)
@@ -446,7 +460,6 @@ class ReiDosEmbeds : MainAPI() {
                     var nextUrl = iframeMatch.groupValues[1].replace("&amp;", "&")
                     if (nextUrl.startsWith("//")) nextUrl = "https:$nextUrl"
                     
-                    // Se o iframe encontrado for do YouTube/Twitch, joga pro extrator e finaliza
                     if (nextUrl.contains("youtube.com") || nextUrl.contains("youtu.be") || nextUrl.contains("twitch.tv")) {
                         loadExtractor(nextUrl, subtitleCallback, callback)
                         return
