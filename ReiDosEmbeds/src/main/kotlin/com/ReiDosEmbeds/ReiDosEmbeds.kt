@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import org.json.JSONArray
 import java.net.URI
@@ -110,13 +111,11 @@ class ReiDosEmbeds : MainAPI() {
                                 if (dateMatch != null) {
                                     val parts = dateMatch.value.split("/")
                                     if (parts.size == 3) {
-                                        // Formato YYYYMMDD para ordenação alfanumérica perfeita
                                         eventDate = "${parts[2]}${parts[1]}${parts[0]}" 
                                     }
                                 }
                             }
                             
-                            // Criação de uma chave de ordenação. Ex: 202607232240
                             val sortKey = if (eventDate.isNotEmpty() && eventTime.isNotEmpty()) {
                                 "${eventDate}${eventTime}"
                             } else if (eventTime.isNotEmpty()) {
@@ -141,13 +140,11 @@ class ReiDosEmbeds : MainAPI() {
                 }
 
                 if (tempAgendaEvents.isNotEmpty()) {
-                    // Ordenação priorizando o Ao Vivo e, em seguida, pelo horário que vai começar
                     tempAgendaEvents.sortWith(compareBy(
                         { !it.isLive },
                         { it.sortKey }
                     ))
                     
-                    // Transforma os objetos temporários em SearchResponses do Cloudstream
                     val agendaEvents = tempAgendaEvents.map { event ->
                         val prefix = if (event.timeStr.isNotEmpty()) "[${event.statusBadge} - ${event.timeStr}]" else "[${event.statusBadge}]"
                         val fullTitle = "$prefix ${event.title}"
@@ -169,7 +166,7 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (Lotes de 4 para evitar 429)
+        // 2. LÓGICA DOS CANAIS (Lotes de 3 + Freio de Segurança contra o Cloudflare)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
@@ -185,6 +182,9 @@ class ReiDosEmbeds : MainAPI() {
                 }
 
                 channelsCacheMap.clear()
+                
+                // Pausa antes de começar a avalanche de requests
+                delay(800)
 
                 // Primeiro, carregamos "Todos" os canais
                 try {
@@ -212,8 +212,11 @@ class ReiDosEmbeds : MainAPI() {
                     }
                 } catch (e: Exception) {}
 
-                // Agora, buscamos o conteúdo de cada categoria com precisão em lotes (chunks)
-                val chunks = categoryPairs.chunked(4)
+                // Pausa de segurança após o request gigantesco de "Todos os canais"
+                delay(1200)
+
+                // Agora, buscamos o conteúdo de cada categoria. Separamos em lotes menores (3 por vez)
+                val chunks = categoryPairs.chunked(3)
                 for (chunk in chunks) {
                     coroutineScope {
                         chunk.map { (catId, catName) ->
@@ -242,10 +245,15 @@ class ReiDosEmbeds : MainAPI() {
                             }
                         }.awaitAll().filterNotNull().forEach { categoriesList.add(it) }
                     }
+                    // FREIO DE SEGURANÇA: Espera 1.2 segundos antes do próximo lote para enganar o Cloudflare
+                    delay(1200)
                 }
                 
-                cachedChannelCategories = categoriesList
-                lastChannelsFetch = currentTime
+                // Proteção para não salvar cache vazio caso a internet caia no meio do processo
+                if (categoriesList.isNotEmpty()) {
+                    cachedChannelCategories = categoriesList
+                    lastChannelsFetch = currentTime
+                }
             }
         } catch (e: Exception) {}
 
