@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import org.json.JSONArray
 import java.net.URI
@@ -36,6 +37,19 @@ class ReiDosEmbeds : MainAPI() {
         "Referer" to "https://reidosembeds.com/"
     )
 
+    private val brazilianKeywords = listOf(
+        "brasileir", "série a", "série b", "série c", "série d", "copa do brasil", "paulistão", "carioca", 
+        "mineiro", "gaúcho", "copa do nordeste", "copa verde", "baiano", "pernambucano", "cearense",
+        "flamengo", "corinthians", "palmeiras", "são paulo", "vasco", "cruzeiro",
+        "grêmio", "internacional", "atlético-mg", "fluminense", "botafogo", "santos",
+        "bahia", "vitória", "fortaleza", "ceará", "sport", "athletico", "bragantino", "juventude", "criciúma", "atlético-go", "cuiabá",
+        "coritiba", "goiás", "américa-mg", "guarani", "vila nova", "ponte preta", "novorizontino",
+        "crb", "avaí", "chapecoense", "ituano", "operário", "mirassol", "paysandu", "amazonas", "botafogo-sp",
+        "náutico", "figueirense", "csa", "sampaio corrêa", "londrina", "tombense", "abc", "volta redonda",
+        "confiança", "ferroviário", "ypiranga", "são bernardo", "floresta", "botafogo-pb", "caxias", "remo", 
+        "santa cruz", "paraná", "joinville", "campinense", "treze", "brasil de pelotas"
+    )
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homeCategories = mutableListOf<HomePageList>()
 
@@ -62,7 +76,11 @@ class ReiDosEmbeds : MainAPI() {
                     if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
                         foundValidEventOnPage = true
                         val rawTitle = card.select("h3").text().trim()
+                        val league = card.select("span.text-zinc-400").text().trim() 
+                        
                         val title = "[$statusBadge] $rawTitle"
+                        val searchName = "$title - $league" 
+                        
                         val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
                         val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
                         
@@ -70,6 +88,7 @@ class ReiDosEmbeds : MainAPI() {
                             agendaEvents.add(
                                 newLiveSearchResponse(title, mainUrl, TvType.Live) {
                                     this.posterUrl = posterUrl
+                                    this.name = searchName 
                                 }
                             )
                         }
@@ -84,7 +103,15 @@ class ReiDosEmbeds : MainAPI() {
             }
 
             if (agendaEvents.isNotEmpty()) {
-                agendaEvents.sortBy { if (it.name.contains("AO VIVO", ignoreCase = true)) 0 else 1 }
+                agendaEvents.sortWith(compareBy(
+                    { !it.name.contains("AO VIVO", ignoreCase = true) },
+                    { !brazilianKeywords.any { kw -> it.name.contains(kw, ignoreCase = true) } }
+                ))
+                
+                agendaEvents.forEach { 
+                    it.name = it.name.substringBeforeLast(" - ").trim() 
+                }
+
                 homeCategories.add(HomePageList("Agenda (Ao Vivo e Em Breve)", agendaEvents, isHorizontalImages = true))
             }
         } catch (e: Exception) {}
@@ -93,8 +120,6 @@ class ReiDosEmbeds : MainAPI() {
         // 2. LÓGICA DOS CANAIS (Cache Nativo de 24 Horas)
         // ==========================================
         try {
-            // Voltamos para a lógica original do site para garantir 100% de precisão nos canais
-            // O cacheTime=1440 vai impedir que dê "Too Many Requests", pois as requisições ocorrerão APENAS 1 vez por dia!
             val categoriesResponse = app.get("$apiUrl/channels/categories", headers = defaultHeaders, cacheTime = 1440).text
             val categoriesJson = JSONObject(categoriesResponse)
             val categoriesArray = categoriesJson.getJSONArray("data")
@@ -103,8 +128,6 @@ class ReiDosEmbeds : MainAPI() {
                 val category = categoriesArray.getJSONObject(i)
                 val categoryName = category.getString("name")
                 val categoryId = category.getString("id")
-                
-                // Bloqueios de categoria foram removidos aqui para aparecerem Animes, Adulto, etc.
                 
                 val channelsResponse = app.get("$apiUrl/channels?category=${categoryId.replace(" ", "%20")}", headers = defaultHeaders, cacheTime = 1440).text
                 val channelsJson = JSONObject(channelsResponse)
@@ -132,9 +155,13 @@ class ReiDosEmbeds : MainAPI() {
                 if (channels.isNotEmpty()) {
                     homeCategories.add(HomePageList(categoryName, channels, isHorizontalImages = true))
                 }
+
+                // O FREIO DE SEGURANÇA: Pausa de 800ms entre as requisições para evitar bloqueio 429
+                delay(800)
             }
 
-            // Categoria "Todos"
+            // Categoria "Todos" - Também com pausa de segurança antes de pedir
+            delay(800)
             val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
             val allChannelsJson = JSONObject(allChannelsResponse)
             val allChannelsArray = allChannelsJson.getJSONArray("data")
@@ -167,7 +194,6 @@ class ReiDosEmbeds : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Se for um evento da agenda
         if (url.contains("/eventos/")) {
             val doc = app.get(url, headers = defaultHeaders).document
             val title = doc.select("h1.event-glow-title").text().trim()
@@ -181,9 +207,7 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Se for um canal normal (onde a variável url guarda a url fantasiada)
         val slug = url.substringAfterLast("/")
-        // Lê o arquivo JSON direto do cache de disco, sem bater no servidor (0 milissegundos)
         val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
         val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
         
@@ -191,7 +215,6 @@ class ReiDosEmbeds : MainAPI() {
         var embedUrl = url
         var posterUrl = ""
         
-        // Busca os detalhes do canal usando o slug interceptado
         for (i in 0 until channelsArray.length()) {
             val channel = channelsArray.getJSONObject(i)
             if (channel.getString("id") == slug) {
@@ -293,8 +316,21 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        resolvePlayer(data, data, name, callback)
-        return true
+        val slug = data.substringAfterLast("/")
+        try {
+            val response = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
+            val channelsArray = JSONObject(response).getJSONArray("data")
+            for (i in 0 until channelsArray.length()) {
+                val channel = channelsArray.getJSONObject(i)
+                if (channel.getString("id") == slug) {
+                    val embedUrl = channel.getString("embed_url")
+                    resolvePlayer(embedUrl, embedUrl, name, callback)
+                    return true
+                }
+            }
+        } catch (e: Exception) {}
+
+        return false
     }
 
     private suspend fun resolvePlayer(
