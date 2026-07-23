@@ -209,7 +209,6 @@ class ReiDosEmbeds : MainAPI() {
                                         var posterUrl = channel.optString("logo_url", "")
                                         if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
                                         
-                                        // Garante que está no cacheMap
                                         channelsCacheMap[slug] = Pair(name, posterUrl)
                                         val channelUrl = "https://reidosembeds.com/canal/$slug"
                                         
@@ -218,7 +217,7 @@ class ReiDosEmbeds : MainAPI() {
                                         })
                                     }
                                     if (channels.isNotEmpty()) HomePageList(catName, channels, isHorizontalImages = true) else null
-                                } catch (e: Exception) { null } // Ignora erros individuais de categoria
+                                } catch (e: Exception) { null } 
                             }
                         }.awaitAll().filterNotNull().forEach { categoriesList.add(it) }
                     }
@@ -260,7 +259,6 @@ class ReiDosEmbeds : MainAPI() {
             posterUrl = cachedData.second
         }
 
-        // Recupera o embedUrl real consultando o cache global
         try {
             val allChannelsResponse = app.get("$apiUrl/channels", headers = defaultHeaders, cacheTime = 1440).text
             val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
@@ -345,9 +343,9 @@ class ReiDosEmbeds : MainAPI() {
                                 val optUrl = choice.attr("data-player-url")
                                 val optName = choice.select(".block.truncate").text().trim()
                                 if (optUrl.isNotEmpty()) {
-                                    resolvePlayer(optUrl, data, optName, callback)
+                                    resolvePlayer(optUrl, data, optName, subtitleCallback, callback)
                                 }
-                            } catch (e: Exception) {} // Proteção: se 1 player cair, os outros continuam rodando!
+                            } catch (e: Exception) {} 
                         }
                     }.awaitAll()
                 }
@@ -355,37 +353,61 @@ class ReiDosEmbeds : MainAPI() {
             } else {
                 val mainIframe = doc.select("iframe#event-player-frame").attr("src")
                 if (mainIframe.isNotEmpty()) {
-                    resolvePlayer(mainIframe, data, "Principal", callback)
+                    resolvePlayer(mainIframe, data, "Principal", subtitleCallback, callback)
                     return true
                 }
             }
         }
 
-        // Links de canais
-        resolvePlayer(data, data, name, callback)
+        // Recuperar o link de embed original
+        val slug = data.substringAfterLast("/")
+        try {
+            val response = app.get("$apiUrl/channels?category=all", headers = defaultHeaders, cacheTime = 1440).text
+            val channelsArray = JSONObject(response).getJSONArray("data")
+            for (i in 0 until channelsArray.length()) {
+                val channel = channelsArray.getJSONObject(i)
+                if (channel.getString("id") == slug) {
+                    val embedUrl = channel.getString("embed_url")
+                    resolvePlayer(embedUrl, embedUrl, name, subtitleCallback, callback)
+                    return true
+                }
+            }
+        } catch (e: Exception) {}
+
+        // Se falhou em buscar na API completa, tenta usar a string bruta
+        resolvePlayer(data, data, name, subtitleCallback, callback)
         return true
     }
 
+    // A MÁGICA ACONTECE AQUI: Adicionado subtitleCallback nos parâmetros para podermos usar o loadExtractor nativo
     private suspend fun resolvePlayer(
         startUrl: String, 
         initialReferer: String, 
         sourceName: String, 
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         var currentUrl = startUrl
         var referer = initialReferer
 
-        // Proteção extra de headers na raspagem de vídeo
-        val reqHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Referer" to referer
-        )
-
         for (i in 0..2) {
             try {
+                // 1. Delegação Nativa: O Cloudstream sabe abrir YouTube e Twitch sozinho!
+                if (currentUrl.contains("youtube.com") || currentUrl.contains("youtu.be") || currentUrl.contains("twitch.tv")) {
+                    loadExtractor(currentUrl, subtitleCallback, callback)
+                    return
+                }
+
+                // Proteção extra de headers na raspagem de vídeo
+                val reqHeaders = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Referer" to referer
+                )
+
                 val currentHtml = app.get(currentUrl, headers = reqHeaders).text
                 
+                // 2. Tenta extrair o player padrão
                 val sourcesPattern = Regex("""var sources\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
                 val sourcesMatch = sourcesPattern.find(currentHtml)
                 
@@ -414,8 +436,8 @@ class ReiDosEmbeds : MainAPI() {
                     return 
                 }
                 
-                // Melhorada a regex de iframe para evitar pegar propaganda por acidente
-                var iframeMatch = Regex("""<iframe[^>]*src="([^"]*(?:rde\.lat|play|embed)[^"]*)"[^>]*>""").find(currentHtml)
+                // 3. Procura por sub-iframes (agora englobando youtube e twitch nas regex também)
+                var iframeMatch = Regex("""<iframe[^>]*src="([^"]*(?:rde\.lat|play|embed|youtube|twitch)[^"]*)"[^>]*>""").find(currentHtml)
                 if (iframeMatch == null) {
                     iframeMatch = Regex("""<iframe[^>]*src="([^"]+)"[^>]*>""").find(currentHtml)
                 }
@@ -423,6 +445,12 @@ class ReiDosEmbeds : MainAPI() {
                 if (iframeMatch != null) {
                     var nextUrl = iframeMatch.groupValues[1].replace("&amp;", "&")
                     if (nextUrl.startsWith("//")) nextUrl = "https:$nextUrl"
+                    
+                    // Se o iframe encontrado for do YouTube/Twitch, joga pro extrator e finaliza
+                    if (nextUrl.contains("youtube.com") || nextUrl.contains("youtu.be") || nextUrl.contains("twitch.tv")) {
+                        loadExtractor(nextUrl, subtitleCallback, callback)
+                        return
+                    }
                     
                     referer = currentUrl
                     currentUrl = nextUrl
