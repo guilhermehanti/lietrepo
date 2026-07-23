@@ -19,7 +19,6 @@ class ReiDosEmbedsProvider : BasePlugin() {
     }
 }
 
-// Classe de dados temporária para ajudar na ordenação da agenda por cronologia
 private data class TempAgendaEvent(
     val title: String,
     val url: String,
@@ -40,7 +39,6 @@ class ReiDosEmbeds : MainAPI() {
 
     private val apiUrl = "https://reidosembeds.com/api"
 
-    // Headers para evitar bloqueios simples de bots
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept" to "application/json, text/plain, */*",
@@ -52,7 +50,7 @@ class ReiDosEmbeds : MainAPI() {
         private var cachedChannelCategories: List<HomePageList>? = null
         private val channelsCacheMap = ConcurrentHashMap<String, Pair<String, String>>()
         private var lastChannelsFetch: Long = 0L
-        private const val CHANNELS_CACHE_MS = 24 * 60 * 60 * 1000L // 24 horas
+        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora de cache (mais seguro)
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
@@ -64,7 +62,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Intacta com Horários)
+        // 1. LÓGICA DA AGENDA (Cronológica Intacta)
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -162,21 +160,23 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (Tradutor Local + Quebra de Cache Envenenado)
+        // 2. LÓGICA DOS CANAIS (Pacotão Global + Tradutor)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
                 val categoriesList = mutableListOf<HomePageList>()
                 
-                // O parâmetro ?v=2 engana o celular e força ele a ignorar o erro que estava salvo
-                val categoriesResponse = app.get("$apiUrl/channels/categories?v=2", headers = defaultHeaders, cacheTime = 1440).text
+                // O c=1 serve para o Cloudstream ignorar a mensagem de erro que ficou salva na memória
+                val categoriesResponse = app.get("$apiUrl/channels/categories?c=1", headers = defaultHeaders, cacheTime = 60).text
                 val categoriesJson = JSONObject(categoriesResponse)
                 
-                // Trava de segurança para não salvar erro novamente se o site cair no exato instante do click
-                if (!categoriesJson.has("data")) throw Exception("O site retornou um formato inesperado ao invés das categorias.")
+                // Captura o erro oficial do servidor (Ex: Too Many Attempts)
+                if (!categoriesJson.has("data")) {
+                    val apiMsg = categoriesJson.optString("message", "O site bloqueou a conexão. Aguarde uns minutos.")
+                    throw Exception(apiMsg)
+                }
                 
                 val categoriesArray = categoriesJson.getJSONArray("data")
-                
                 val categoryMap = mutableMapOf<String, String>()
                 for (i in 0 until categoriesArray.length()) {
                     val cat = categoriesArray.getJSONObject(i)
@@ -186,14 +186,15 @@ class ReiDosEmbeds : MainAPI() {
                     categoryMap[id.lowercase()] = name 
                 }
 
-                // O parâmetro ?v=2 aqui faz a mesma quebra de cache para a lista global
-                val allChannelsResponse = app.get("$apiUrl/channels?v=2", headers = defaultHeaders, cacheTime = 1440).text
+                val allChannelsResponse = app.get("$apiUrl/channels?c=1", headers = defaultHeaders, cacheTime = 60).text
                 val allChannelsJson = JSONObject(allChannelsResponse)
                 
-                if (!allChannelsJson.has("data")) throw Exception("O site retornou um formato inesperado ao invés dos canais.")
+                if (!allChannelsJson.has("data")) {
+                    val apiMsg = allChannelsJson.optString("message", "O site bloqueou a conexão. Aguarde uns minutos.")
+                    throw Exception(apiMsg)
+                }
                 
                 val allChannelsArray = allChannelsJson.getJSONArray("data")
-                
                 val allChannelsList = mutableListOf<SearchResponse>()
                 val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
 
@@ -224,12 +225,14 @@ class ReiDosEmbeds : MainAPI() {
                         categoriesOfChannel.add(catObj.trim())
                     }
                     
-                    if (categoriesOfChannel.isEmpty()) {
-                        categoriesOfChannel.add("Outros")
-                    }
+                    if (categoriesOfChannel.isEmpty()) categoriesOfChannel.add("Outros")
                     
                     for (rawCat in categoriesOfChannel) {
-                        val beautifulName = categoryMap[rawCat] ?: categoryMap[rawCat.lowercase()] ?: if (rawCat == "Outros") "Outros" else rawCat.replaceFirstChar { it.uppercase() }
+                        var beautifulName = categoryMap[rawCat] ?: categoryMap[rawCat.lowercase()] ?: rawCat.replaceFirstChar { it.uppercase() }
+                        
+                        // Tradutor Mágico de Categorias do Site
+                        if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                        if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
                         
                         if (!groupedChannels.containsKey(beautifulName)) {
                             groupedChannels[beautifulName] = mutableListOf()
@@ -242,8 +245,12 @@ class ReiDosEmbeds : MainAPI() {
                     categoriesList.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
                 }
 
+                // Mantém a ordem oficial de categorias que o site usa
                 for (i in 0 until categoriesArray.length()) {
-                    val beautifulName = categoriesArray.getJSONObject(i).getString("name")
+                    var beautifulName = categoriesArray.getJSONObject(i).getString("name")
+                    if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                    if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
+                    
                     val channels = groupedChannels[beautifulName]
                     if (!channels.isNullOrEmpty()) {
                         categoriesList.add(HomePageList(beautifulName, channels, isHorizontalImages = true))
@@ -251,6 +258,7 @@ class ReiDosEmbeds : MainAPI() {
                     }
                 }
 
+                // Adiciona as categorias extras (sobras)
                 for ((catName, channels) in groupedChannels) {
                     if (channels.isNotEmpty()) {
                         categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
@@ -263,7 +271,7 @@ class ReiDosEmbeds : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            val errorMsg = e.toString().take(150) 
+            val errorMsg = e.message ?: e.toString().take(150)
             val errorItem = newLiveSearchResponse(errorMsg, "https://reidosembeds.com", TvType.Live) {
                 this.posterUrl = "https://via.placeholder.com/300x450.png?text=ERRO+API"
             }
@@ -302,8 +310,7 @@ class ReiDosEmbeds : MainAPI() {
         }
 
         try {
-            // Utilizamos v=2 aqui também para nos aproveitarmos do cache correto da página inicial!
-            val allChannelsResponse = app.get("$apiUrl/channels?v=2", headers = defaultHeaders, cacheTime = 1440).text
+            val allChannelsResponse = app.get("$apiUrl/channels?c=1", headers = defaultHeaders, cacheTime = 60).text
             val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
             for (i in 0 until channelsArray.length()) {
                 val channel = channelsArray.getJSONObject(i)
@@ -404,8 +411,7 @@ class ReiDosEmbeds : MainAPI() {
 
         val slug = data.substringAfterLast("/")
         try {
-            // Buscando os embeds no cache recém limpado usando o v=2
-            val response = app.get("$apiUrl/channels?v=2", headers = defaultHeaders, cacheTime = 1440).text
+            val response = app.get("$apiUrl/channels?c=1", headers = defaultHeaders, cacheTime = 60).text
             val channelsArray = JSONObject(response).getJSONArray("data")
             for (i in 0 until channelsArray.length()) {
                 val channel = channelsArray.getJSONObject(i)
