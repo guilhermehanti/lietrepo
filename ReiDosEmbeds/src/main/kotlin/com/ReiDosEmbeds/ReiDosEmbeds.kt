@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import org.json.JSONObject
 import org.json.JSONArray
 import java.net.URI
@@ -51,11 +50,11 @@ class ReiDosEmbeds : MainAPI() {
         private var cachedChannelCategories: List<HomePageList>? = null
         private val channelsCacheMap = ConcurrentHashMap<String, Pair<String, String>>()
         private var lastChannelsFetch: Long = 0L
-        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L 
+        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora de cache
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
-        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L 
+        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L // 15 minutos de cache
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -63,7 +62,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Cronológica Intacta)
+        // 1. LÓGICA DA AGENDA (Sequencial e Paginada)
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -161,91 +160,131 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (Ponto de Equilíbrio)
+        // 2. LÓGICA DOS CANAIS (Sequencial e Paginada - Igual à Agenda!)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
                 val categoriesList = mutableListOf<HomePageList>()
                 
-                // ?v=3 limpa o cache anterior obrigatoriamente
-                val categoriesResponse = app.get("$apiUrl/channels/categories?v=3", headers = defaultHeaders, cacheTime = 1440).text
+                // 1º Passo: Puxar o "Dicionário" de Categorias (Apenas 1 vez)
+                val categoriesResponse = app.get("$apiUrl/channels/categories?v=4", headers = defaultHeaders, cacheTime = 1440).text
                 val categoriesJson = JSONObject(categoriesResponse)
                 
                 if (!categoriesJson.has("data")) {
-                    throw Exception(categoriesJson.optString("message", "Site bloqueou a conexão. Aguarde."))
+                    throw Exception(categoriesJson.optString("message", "Bloqueio do servidor. Aguarde alguns minutos e tente novamente."))
                 }
                 
                 val categoriesArray = categoriesJson.getJSONArray("data")
-                val categoryPairs = mutableListOf<Pair<String, String>>()
+                val categoryMap = mutableMapOf<String, String>()
                 for (i in 0 until categoriesArray.length()) {
                     val cat = categoriesArray.getJSONObject(i)
-                    categoryPairs.add(Pair(cat.getString("id"), cat.getString("name")))
+                    val id = cat.getString("id")
+                    val name = cat.getString("name")
+                    categoryMap[id] = name
+                    categoryMap[id.lowercase()] = name 
                 }
 
-                channelsCacheMap.clear()
-                
                 val allChannelsList = mutableListOf<SearchResponse>()
-                val addedSlugs = mutableSetOf<String>() // Controle para evitar canais repetidos na aba "Todos"
+                val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
+                channelsCacheMap.clear()
 
-                // Divide as categorias em grupos de 4
-                val chunks = categoryPairs.chunked(4)
-                
-                for (chunk in chunks) {
-                    val chunkResults = coroutineScope {
-                        chunk.map { (catId, catName) ->
-                            async {
-                                try {
-                                    val channelsResponse = app.get("$apiUrl/channels?category=${catId.replace(" ", "%20")}&v=3", headers = defaultHeaders, cacheTime = 1440).text
-                                    val channelsJson = JSONObject(channelsResponse)
-                                    if (!channelsJson.has("data")) return@async null
-                                    
-                                    val channelsArray = channelsJson.getJSONArray("data")
-                                    val channels = mutableListOf<SearchResponse>()
-                                    
-                                    for (j in 0 until channelsArray.length()) {
-                                        val channel = channelsArray.getJSONObject(j)
-                                        val name = channel.getString("name")
-                                        val slug = channel.getString("id")
-                                        var posterUrl = channel.optString("logo_url", "")
-                                        if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
-                                        
-                                        channelsCacheMap[slug] = Pair(name, posterUrl)
-                                        val channelUrl = "https://reidosembeds.com/canal/$slug"
-                                        
-                                        val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
-                                            this.posterUrl = posterUrl
-                                        }
-                                        channels.add(searchResponse)
-                                    }
-                                    if (channels.isNotEmpty()) Pair(catName, channels) else null
-                                } catch (e: Exception) { null } 
-                            }
-                        }.awaitAll().filterNotNull()
-                    }
-                    
-                    // Adiciona as categorias deste lote na tela
-                    for ((catName, channels) in chunkResults) {
-                        categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
+                // 2º Passo: Loop Paginado para pegar absolutamente TODOS os canais, sem pular nenhum
+                var currentChannelPage = 1
+                var keepFetchingChannels = true
+
+                while (keepFetchingChannels && currentChannelPage <= 20) { // Trava de segurança no 20 para evitar loop infinito
+                    try {
+                        val channelsResponse = app.get("$apiUrl/channels?page=$currentChannelPage&v=4", headers = defaultHeaders, cacheTime = 1440).text
+                        val channelsJson = JSONObject(channelsResponse)
                         
-                        // Monta o "Todos" localmente aproveitando os dados
-                        channels.forEach { ch ->
-                            if (addedSlugs.add(ch.url)) {
-                                allChannelsList.add(ch)
+                        if (channelsJson.has("data")) {
+                            val channelsDataArray = channelsJson.getJSONArray("data")
+                            
+                            // Se a página vier vazia, significa que chegamos ao fim do banco de dados
+                            if (channelsDataArray.length() == 0) {
+                                keepFetchingChannels = false
+                            } else {
+                                for (i in 0 until channelsDataArray.length()) {
+                                    val channel = channelsDataArray.getJSONObject(i)
+                                    val name = channel.getString("name")
+                                    val slug = channel.getString("id")
+                                    var posterUrl = channel.optString("logo_url", "")
+                                    if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+                                    
+                                    channelsCacheMap[slug] = Pair(name, posterUrl)
+                                    val channelUrl = "https://reidosembeds.com/canal/$slug"
+                                    
+                                    val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
+                                        this.posterUrl = posterUrl
+                                    }
+                                    
+                                    // Adiciona na aba Todos evitando clones
+                                    if (allChannelsList.none { it.url == channelUrl }) {
+                                        allChannelsList.add(searchResponse)
+                                    }
+                                    
+                                    // Separa os canais nas abas correspondentes
+                                    val categoriesOfChannel = mutableListOf<String>()
+                                    val catObj = channel.opt("category")
+                                    if (catObj is JSONArray) {
+                                        for (k in 0 until catObj.length()) {
+                                            categoriesOfChannel.add(catObj.getString(k).trim())
+                                        }
+                                    } else if (catObj is String && catObj.trim().isNotEmpty()) {
+                                        categoriesOfChannel.add(catObj.trim())
+                                    }
+                                    
+                                    if (categoriesOfChannel.isEmpty()) categoriesOfChannel.add("Outros")
+                                    
+                                    for (rawCat in categoriesOfChannel) {
+                                        var beautifulName = categoryMap[rawCat] ?: categoryMap[rawCat.lowercase()] ?: rawCat.replaceFirstChar { it.uppercase() }
+                                        
+                                        if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                                        if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
+                                        
+                                        if (!groupedChannels.containsKey(beautifulName)) {
+                                            groupedChannels[beautifulName] = mutableListOf()
+                                        }
+                                        
+                                        if (groupedChannels[beautifulName]?.none { it.url == channelUrl } == true) {
+                                            groupedChannels[beautifulName]?.add(searchResponse)
+                                        }
+                                    }
+                                }
+                                currentChannelPage++
                             }
+                        } else {
+                            keepFetchingChannels = false
                         }
+                    } catch (e: Exception) {
+                        keepFetchingChannels = false // Se der timeout ou erro no meio do caminho, salva o que já pegou e para
                     }
-                    
-                    // FREIO ABS: 250ms de pausa. Suficiente para o Cloudflare, rápido para o Cloudstream.
-                    delay(250)
-                }
-                
-                // Coloca a aba "Todos" (montada offline) no topo da tela
-                if (allChannelsList.isNotEmpty()) {
-                    categoriesList.add(0, HomePageList("Todos", allChannelsList, isHorizontalImages = true))
                 }
 
-                // Só salva no cache se tiver conseguido carregar pelo menos as categorias básicas
-                if (categoriesList.size >= 3) {
+                // 3º Passo: Desenhar a interface na tela com as listas completas
+                if (allChannelsList.isNotEmpty()) {
+                    categoriesList.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
+                }
+
+                for (i in 0 until categoriesArray.length()) {
+                    var beautifulName = categoriesArray.getJSONObject(i).getString("name")
+                    if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                    if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
+                    
+                    val channels = groupedChannels[beautifulName]
+                    if (!channels.isNullOrEmpty()) {
+                        categoriesList.add(HomePageList(beautifulName, channels, isHorizontalImages = true))
+                        groupedChannels.remove(beautifulName)
+                    }
+                }
+
+                for ((catName, channels) in groupedChannels) {
+                    if (channels.isNotEmpty()) {
+                        categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
+                    }
+                }
+
+                if (categoriesList.isNotEmpty()) {
                     cachedChannelCategories = categoriesList
                     lastChannelsFetch = currentTime
                 }
@@ -290,16 +329,29 @@ class ReiDosEmbeds : MainAPI() {
         }
 
         try {
-            val allChannelsResponse = app.get("$apiUrl/channels?v=3", headers = defaultHeaders, cacheTime = 60).text
-            val channelsArray = JSONObject(allChannelsResponse).getJSONArray("data")
-            for (i in 0 until channelsArray.length()) {
-                val channel = channelsArray.getJSONObject(i)
-                if (channel.getString("id") == slug) {
-                    embedUrl = channel.getString("embed_url")
-                    if (posterUrl.isEmpty()) {
-                        posterUrl = channel.optString("logo_url", "")
-                        if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+            var currentPage = 1
+            var keepSearching = true
+            while (keepSearching && currentPage <= 20) {
+                val allChannelsResponse = app.get("$apiUrl/channels?page=$currentPage&v=4", headers = defaultHeaders, cacheTime = 1440).text
+                val channelsJson = JSONObject(allChannelsResponse)
+                if (channelsJson.has("data")) {
+                    val channelsArray = channelsJson.getJSONArray("data")
+                    if (channelsArray.length() == 0) break
+                    
+                    for (i in 0 until channelsArray.length()) {
+                        val channel = channelsArray.getJSONObject(i)
+                        if (channel.getString("id") == slug) {
+                            embedUrl = channel.getString("embed_url")
+                            if (posterUrl.isEmpty()) {
+                                posterUrl = channel.optString("logo_url", "")
+                                if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+                            }
+                            keepSearching = false
+                            break
+                        }
                     }
+                    currentPage++
+                } else {
                     break
                 }
             }
@@ -391,14 +443,26 @@ class ReiDosEmbeds : MainAPI() {
 
         val slug = data.substringAfterLast("/")
         try {
-            val response = app.get("$apiUrl/channels?v=3", headers = defaultHeaders, cacheTime = 60).text
-            val channelsArray = JSONObject(response).getJSONArray("data")
-            for (i in 0 until channelsArray.length()) {
-                val channel = channelsArray.getJSONObject(i)
-                if (channel.getString("id") == slug) {
-                    val embedUrl = channel.getString("embed_url")
-                    resolvePlayer(embedUrl, embedUrl, name, subtitleCallback, callback)
-                    return true
+            var currentPage = 1
+            var keepSearching = true
+            while (keepSearching && currentPage <= 20) {
+                val response = app.get("$apiUrl/channels?page=$currentPage&v=4", headers = defaultHeaders, cacheTime = 1440).text
+                val channelsJson = JSONObject(response)
+                if (channelsJson.has("data")) {
+                    val channelsArray = channelsJson.getJSONArray("data")
+                    if (channelsArray.length() == 0) break
+                    
+                    for (i in 0 until channelsArray.length()) {
+                        val channel = channelsArray.getJSONObject(i)
+                        if (channel.getString("id") == slug) {
+                            val embedUrl = channel.getString("embed_url")
+                            resolvePlayer(embedUrl, embedUrl, name, subtitleCallback, callback)
+                            return true
+                        }
+                    }
+                    currentPage++
+                } else {
+                    break
                 }
             }
         } catch (e: Exception) {}
