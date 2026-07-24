@@ -4,10 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import org.json.JSONObject
 import org.json.JSONArray
 import java.net.URI
@@ -49,7 +45,7 @@ class ReiDosEmbeds : MainAPI() {
     companion object {
         private var cachedChannelCategories: List<HomePageList>? = null
         private var lastChannelsFetch: Long = 0L
-        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora
+        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora de cache
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
@@ -61,7 +57,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Raspagem HTML Intacta)
+        // 1. LÓGICA DA AGENDA (Sequencial - Intacta)
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -137,7 +133,7 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (Nova Raspagem Direta do HTML - Fim da API!)
+        // 2. LÓGICA DOS CANAIS (HTML Sequencial Puro)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
@@ -147,74 +143,63 @@ class ReiDosEmbeds : MainAPI() {
                 val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
                 val addedUrls = mutableSetOf<String>()
 
-                // O site tem +- 12 páginas. Usaremos blocos de 3 para agilizar sem irritar o servidor
-                val chunks = (1..15).chunked(3)
+                var currentChannelPage = 1
                 var keepFetchingChannels = true
 
-                for (chunk in chunks) {
-                    if (!keepFetchingChannels) break
-
-                    val chunkResults = coroutineScope {
-                        chunk.map { p ->
-                            async {
-                                try {
-                                    val pageUrl = "$baseUrl/?page=$p&v=7"
-                                    val doc = app.get(pageUrl, headers = defaultHeaders, cacheTime = 60).document
-                                    val cards = doc.select("article[data-channel-card]")
-                                    if (cards.isEmpty()) null else cards
-                                } catch (e: Exception) { null }
-                            }
-                        }.awaitAll().filterNotNull()
-                    }
-
-                    if (chunkResults.isEmpty()) {
-                        keepFetchingChannels = false
-                        break
-                    }
-
-                    for (cards in chunkResults) {
-                        for (card in cards) {
-                            val title = card.selectFirst("h4")?.text()?.trim() ?: continue
-                            val channelUrl = card.selectFirst("a")?.attr("href") ?: continue
-                            val posterUrl = card.selectFirst("img")?.attr("src") ?: ""
-                            
-                            // Previne canais duplicados
-                            if (!addedUrls.add(channelUrl)) continue
-
-                            val searchResponse = newLiveSearchResponse(title, channelUrl, TvType.Live) {
-                                this.posterUrl = posterUrl
-                            }
-                            allChannelsList.add(searchResponse)
-
-                            // O Segredo de Mestre: Pegar a categoria direto do parágrafo do HTML!
-                            val catsText = card.selectFirst("p.uppercase")?.text() ?: "Outros"
-                            
-                            // O site usa "•", "·" ou "-" para separar categorias (ex: Variedades • Séries)
-                            val cats = catsText.split("•", "·", "-").map { it.trim() }.filter { it.isNotEmpty() }
-                            val finalCats = if (cats.isEmpty()) listOf("Outros") else cats
-                            
-                            for (c in finalCats) {
-                                // Deixa a primeira letra maiúscula bonitinha
-                                var catName = c.lowercase().replaceFirstChar { it.uppercase() }
+                // Laço Sequencial "Fila Indiana": Garante que nenhuma página seja derrubada por requisições simultâneas
+                while (keepFetchingChannels && currentChannelPage <= 15) {
+                    try {
+                        val pageUrl = "$baseUrl/?page=$currentChannelPage&v=8"
+                        val doc = app.get(pageUrl, headers = defaultHeaders, cacheTime = 1440).document
+                        val cards = doc.select("article[data-channel-card]")
+                        
+                        if (cards.isEmpty()) {
+                            // Se a página vier vazia, chegamos ao final da lista (ex: depois da página 11 ou 12)
+                            keepFetchingChannels = false
+                        } else {
+                            for (card in cards) {
+                                val title = card.selectFirst("h4")?.text()?.trim() ?: continue
+                                val channelUrl = card.selectFirst("a")?.attr("href") ?: continue
+                                val posterUrl = card.selectFirst("img")?.attr("src") ?: ""
                                 
-                                // Correções rápidas de nomeclatura
-                                if (catName.equals("Geral", ignoreCase = true)) catName = "Canais Abertos"
-                                if (catName.equals("Glo", ignoreCase = true)) catName = "Rede Globo"
+                                // Controle para não colocar canais duplicados na aba "Todos"
+                                if (!addedUrls.add(channelUrl)) continue
+
+                                val searchResponse = newLiveSearchResponse(title, channelUrl, TvType.Live) {
+                                    this.posterUrl = posterUrl
+                                }
+                                allChannelsList.add(searchResponse)
+
+                                // Extrai a categoria do parágrafo HTML e lida com múltiplas categorias[cite: 1]
+                                val catsText = card.selectFirst("p.uppercase")?.text() ?: "Outros"
+                                val cats = catsText.split("•", "·", "-").map { it.trim() }.filter { it.isNotEmpty() }
+                                val finalCats = if (cats.isEmpty()) listOf("Outros") else cats
                                 
-                                groupedChannels.getOrPut(catName) { mutableListOf() }.add(searchResponse)
+                                for (c in finalCats) {
+                                    // Capitaliza perfeitamente cada palavra da categoria (ex: "canais abertos" vira "Canais Abertos")
+                                    var catName = c.split(" ").joinToString(" ") { word -> 
+                                        word.lowercase().replaceFirstChar { it.uppercase() } 
+                                    }
+                                    
+                                    if (catName.equals("Geral", ignoreCase = true)) catName = "Canais Abertos"
+                                    if (catName.equals("Glo", ignoreCase = true)) catName = "Rede Globo"
+                                    
+                                    groupedChannels.getOrPut(catName) { mutableListOf() }.add(searchResponse)
+                                }
                             }
+                            currentChannelPage++
                         }
+                    } catch (e: Exception) {
+                        // Se der erro em alguma página (timeout de rede), salvamos o que já foi lido e paramos o loop
+                        keepFetchingChannels = false
                     }
-                    // Pequena pausa (freio ABS) para o Cloudflare tratar como um navegador comum
-                    delay(200)
                 }
 
-                // Monta a aba "Todos" gigante no topo
+                // Monta a interface na ordem correta
                 if (allChannelsList.isNotEmpty()) {
                     categoriesList.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
                 }
 
-                // Organiza as abas de categorias extraídas do HTML
                 groupedChannels.toSortedMap().forEach { (catName, channels) ->
                     if (channels.isNotEmpty()) {
                         categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
@@ -240,7 +225,6 @@ class ReiDosEmbeds : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Se for Agenda, raspamos da página de eventos oficial deles
         if (url.contains("/eventos/")) {
             val doc = app.get(url, headers = defaultHeaders).document
             val title = doc.select("h1.event-glow-title").text().trim()
@@ -257,25 +241,21 @@ class ReiDosEmbeds : MainAPI() {
         // ==========================================
         // LÓGICA DE CANAIS AO DAR PLAY (Via HTML)
         // ==========================================
-        // Quando você clica num canal, a variável 'url' é algo como: https://v2.rdse.site/ae
         val doc = app.get(url, headers = defaultHeaders).document
         
-        // Extrai o nome da tag title
         var title = doc.selectFirst("title")?.text()?.replace(" - Rei dos Embeds", "")?.trim() ?: "Canal Ao Vivo"
         
-        // A mágica: procura o iframe principal direto no HTML (conforme o código que você me enviou)
-        var embedUrl = doc.selectFirst("iframe#play-inner-frame")?.attr("src")
+        // Extrai o embed oficial que fica oculto na tag iframe[cite: 2]
+        val embedUrl = doc.selectFirst("iframe#play-inner-frame")?.attr("src")[cite: 2]
             ?: doc.selectFirst("iframe")?.attr("src") 
-            ?: url // Fallback de segurança
+            ?: url 
             
-        // Na tela do player, passamos a url do Embed para o Extrator resolver
         return newMovieLoadResponse(title, url, TvType.Live, embedUrl) {
             this.plot = "Assista $title ao vivo!"
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        // Agora até a pesquisa burla a API e usa o mecanismo HTML deles!
         try {
             val searchUrl = "$baseUrl/?s=${query.replace(" ", "+")}"
             val doc = app.get(searchUrl, headers = defaultHeaders).document
@@ -294,7 +274,6 @@ class ReiDosEmbeds : MainAPI() {
                 })
             }
             
-            // Busca também na agenda por garantia
             val agendaDoc = app.get("$baseUrl/agenda?s=${query.replace(" ", "+")}", headers = defaultHeaders).document
             val eventCards = agendaDoc.select("article[data-event-card]")
             for (card in eventCards) {
@@ -347,7 +326,6 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Como nós extraímos a URL do Iframe puro no `load()`, a variável "data" já é o player de destino.
         resolvePlayer(data, data, name, subtitleCallback, callback)
         return true
     }
