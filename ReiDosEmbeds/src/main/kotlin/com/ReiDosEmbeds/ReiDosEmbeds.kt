@@ -57,7 +57,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Sequencial - Intacta)
+        // 1. LÓGICA DA AGENDA (Sequencial)
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -146,7 +146,7 @@ class ReiDosEmbeds : MainAPI() {
                 var currentChannelPage = 1
                 var keepFetchingChannels = true
 
-                // Laço Sequencial "Fila Indiana": Garante que nenhuma página seja derrubada por requisições simultâneas
+                // Laço Sequencial "Fila Indiana": Garante que nenhuma página seja derrubada por requisições
                 while (keepFetchingChannels && currentChannelPage <= 15) {
                     try {
                         val pageUrl = "$baseUrl/?page=$currentChannelPage&v=8"
@@ -154,7 +154,6 @@ class ReiDosEmbeds : MainAPI() {
                         val cards = doc.select("article[data-channel-card]")
                         
                         if (cards.isEmpty()) {
-                            // Se a página vier vazia, chegamos ao final da lista (ex: depois da página 11 ou 12)
                             keepFetchingChannels = false
                         } else {
                             for (card in cards) {
@@ -170,13 +169,13 @@ class ReiDosEmbeds : MainAPI() {
                                 }
                                 allChannelsList.add(searchResponse)
 
-                                // Extrai a categoria do parágrafo HTML e lida com múltiplas categorias[cite: 1]
+                                // Extrai a categoria do parágrafo HTML e lida com múltiplas categorias
                                 val catsText = card.selectFirst("p.uppercase")?.text() ?: "Outros"
                                 val cats = catsText.split("•", "·", "-").map { it.trim() }.filter { it.isNotEmpty() }
                                 val finalCats = if (cats.isEmpty()) listOf("Outros") else cats
                                 
                                 for (c in finalCats) {
-                                    // Capitaliza perfeitamente cada palavra da categoria (ex: "canais abertos" vira "Canais Abertos")
+                                    // Capitaliza perfeitamente cada palavra da categoria
                                     var catName = c.split(" ").joinToString(" ") { word -> 
                                         word.lowercase().replaceFirstChar { it.uppercase() } 
                                     }
@@ -190,7 +189,7 @@ class ReiDosEmbeds : MainAPI() {
                             currentChannelPage++
                         }
                     } catch (e: Exception) {
-                        // Se der erro em alguma página (timeout de rede), salvamos o que já foi lido e paramos o loop
+                        // Se der erro em alguma página (timeout de rede), salvamos o que já foi lido e paramos
                         keepFetchingChannels = false
                     }
                 }
@@ -243,10 +242,10 @@ class ReiDosEmbeds : MainAPI() {
         // ==========================================
         val doc = app.get(url, headers = defaultHeaders).document
         
-        var title = doc.selectFirst("title")?.text()?.replace(" - Rei dos Embeds", "")?.trim() ?: "Canal Ao Vivo"
+        val title = doc.selectFirst("title")?.text()?.replace(" - Rei dos Embeds", "")?.trim() ?: "Canal Ao Vivo"
         
-        // Extrai o embed oficial que fica oculto na tag iframe[cite: 2]
-        val embedUrl = doc.selectFirst("iframe#play-inner-frame")?.attr("src")[cite: 2]
+        // Extrai o embed oficial que fica oculto na tag iframe
+        val embedUrl = doc.selectFirst("iframe#play-inner-frame")?.attr("src")
             ?: doc.selectFirst("iframe")?.attr("src") 
             ?: url 
             
@@ -305,16 +304,13 @@ class ReiDosEmbeds : MainAPI() {
             val choices = doc.select(".player-choice[data-player-url]")
             
             if (choices.isNotEmpty()) {
-                coroutineScope {
-                    choices.map { choice ->
-                        async {
-                            try {
-                                val optUrl = choice.attr("data-player-url")
-                                val optName = choice.select(".block.truncate").text().trim()
-                                if (optUrl.isNotEmpty()) resolvePlayer(optUrl, data, optName, subtitleCallback, callback)
-                            } catch (e: Exception) {} 
-                        }
-                    }.awaitAll()
+                // amap é a função de paralelismo segura nativa do Cloudstream
+                choices.amap { choice ->
+                    try {
+                        val optUrl = choice.attr("data-player-url")
+                        val optName = choice.select(".block.truncate").text().trim()
+                        if (optUrl.isNotEmpty()) resolvePlayer(optUrl, data, optName, subtitleCallback, callback)
+                    } catch (e: Exception) {} 
                 }
                 return true
             } else {
