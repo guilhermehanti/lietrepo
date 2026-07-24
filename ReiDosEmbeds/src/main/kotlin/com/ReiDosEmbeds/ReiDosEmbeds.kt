@@ -26,7 +26,8 @@ private data class TempAgendaEvent(
 )
 
 class ReiDosEmbeds : MainAPI() {
-    override var name = "Rei dos Embeds"
+    // NOME ALTERADO para forçar o Cloudstream a limpar a RAM e criar uma aba nova limpa!
+    override var name = "Rei dos Embeds (Novo)"
     override val hasMainPage = true
     override var lang = "pt-br"
     override val hasDownloadSupport = false
@@ -45,7 +46,7 @@ class ReiDosEmbeds : MainAPI() {
     companion object {
         private var cachedChannelCategories: List<HomePageList>? = null
         private var lastChannelsFetch: Long = 0L
-        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora de cache
+        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
@@ -57,7 +58,7 @@ class ReiDosEmbeds : MainAPI() {
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Sequencial Pura)
+        // 1. LÓGICA DA AGENDA 
         // ==========================================
         try {
             if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
@@ -133,71 +134,84 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (Pesquisa Direta HTML por Categoria Paginada)
+        // 2. LÓGICA DOS CANAIS (HTML Paginação Oficial)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
                 val categoriesList = mutableListOf<HomePageList>()
                 val allChannelsMap = linkedMapOf<String, SearchResponse>() 
                 
-                // Passo 1: Descobrir as categorias diretamente do Menu HTML do site
-                val indexUrl = "$baseUrl/?v=12"
-                val doc = app.get(indexUrl, headers = defaultHeaders, cacheTime = 1440).document
+                val indexUrl = "$baseUrl/"
+                val doc = app.get(indexUrl, headers = defaultHeaders, cacheTime = 15).document
                 
+                // Mapeia todas as opções do menu dropdown
                 val genreOptions = doc.select("select[name=genre] option").mapNotNull {
                     val value = it.attr("value")
                     val name = it.text().trim()
-                    if (value.isNotBlank() && value != "all") Pair(value, name) else null
+                    if (value.isNotBlank() && value != "all" && value != "Todas as categorias") Pair(value, name) else null
                 }
 
-                // Passo 2: Fila Indiana Absoluta (Acessa o site categoria por categoria e pagina por pagina)
-                for ((slug, catName) in genreOptions) {
-                    val catChannels = mutableListOf<SearchResponse>()
-                    var p = 1
-                    var keepFetchingCat = true
-                    
-                    // Aumentamos a trava de segurança para 15 páginas. Garante que categorias enormes venham 100%
-                    while(keepFetchingCat && p <= 15) { 
-                        try {
-                            val catUrl = "$baseUrl/?genre=$slug&page=$p&v=12"
-                            val pageDoc = app.get(catUrl, headers = defaultHeaders, cacheTime = 1440).document
-                            val cards = pageDoc.select("article[data-channel-card]")
-                            
-                            if (cards.isEmpty()) {
-                                keepFetchingCat = false
-                            } else {
-                                for (card in cards) {
-                                    val title = card.selectFirst("h4")?.text()?.trim() ?: continue
-                                    val channelUrl = card.selectFirst("a")?.attr("href") ?: continue
-                                    var posterUrl = card.selectFirst("img")?.attr("src") ?: ""
-                                    if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
-
-                                    val searchResponse = newLiveSearchResponse(title, channelUrl, TvType.Live) {
-                                        this.posterUrl = posterUrl
-                                    }
-                                    catChannels.add(searchResponse)
-                                    
-                                    // Adiciona no pacotão global para montar o "Todos" sem repetidos
-                                    allChannelsMap[channelUrl] = searchResponse
-                                }
+                // O amap executa em blocos protegendo contra o Timeout do Cloudstream, enquanto respeita o servidor
+                val chunks = genreOptions.chunked(4)
+                for (chunk in chunks) {
+                    val chunkResults = chunk.amap { (slug, catName) ->
+                        val catChannels = mutableListOf<SearchResponse>()
+                        var currentCatUrl = "$baseUrl/?genre=$slug"
+                        var keepFetchingCat = true
+                        var p = 1
+                        
+                        while(keepFetchingCat && p <= 15) { 
+                            try {
+                                val pageDoc = app.get(currentCatUrl, headers = defaultHeaders, cacheTime = 15).document
+                                val cards = pageDoc.select("article[data-channel-card]")
                                 
-                                // O site tem o botão "Próxima"? Se não, acaba o loop dessa categoria
-                                val hasNext = pageDoc.selectFirst("a.channels-api-page-btn[rel=next]") != null
-                                if (!hasNext) keepFetchingCat = false
-                                p++
+                                if (cards.isEmpty()) {
+                                    keepFetchingCat = false
+                                } else {
+                                    for (card in cards) {
+                                        val title = card.selectFirst("h4")?.text()?.trim() ?: continue
+                                        val channelUrl = card.selectFirst("a")?.attr("href") ?: continue
+                                        var posterUrl = card.selectFirst("img")?.attr("src") ?: ""
+                                        if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+
+                                        catChannels.add(newLiveSearchResponse(title, channelUrl, TvType.Live) {
+                                            this.posterUrl = posterUrl
+                                        })
+                                    }
+                                    
+                                    // A MÁGICA: Extrair exatamente o link "href" oficial do botão Próxima!
+                                    val nextBtn = pageDoc.selectFirst("a.channels-api-page-btn[rel=next]")
+                                    if (nextBtn != null) {
+                                        var nextUrl = nextBtn.attr("href")
+                                        
+                                        // Proteção para garantir que o link extraído seja completo
+                                        if (nextUrl.startsWith("//")) nextUrl = "https:$nextUrl"
+                                        else if (nextUrl.startsWith("/")) nextUrl = "$baseUrl$nextUrl"
+                                        
+                                        currentCatUrl = nextUrl.replace("&amp;", "&")
+                                        p++
+                                    } else {
+                                        keepFetchingCat = false
+                                    }
+                                }
+                            } catch(e: Exception) {
+                                keepFetchingCat = false
                             }
-                        } catch(e: Exception) {
-                            keepFetchingCat = false
+                        }
+                        Pair(catName, catChannels)
+                    }
+
+                    // Processa e mescla os resultados obtidos
+                    for ((catName, channels) in chunkResults) {
+                        if (channels.isNotEmpty()) {
+                            val distinctChannels = channels.distinctBy { it.url }
+                            categoriesList.add(HomePageList(catName, distinctChannels, isHorizontalImages = true))
+                            // Alimenta o pacote da aba Todos
+                            distinctChannels.forEach { allChannelsMap[it.url] = it }
                         }
                     }
-                    
-                    if (catChannels.isNotEmpty()) {
-                        // Aplica a categoria formatada, removendo possíveis clones
-                        categoriesList.add(HomePageList(catName, catChannels.distinctBy { it.url }, isHorizontalImages = true))
-                    }
                 }
 
-                // Passo 3: Monta a aba "Todos" gigante
                 if (allChannelsMap.isNotEmpty()) {
                     categoriesList.add(0, HomePageList("Todos", allChannelsMap.values.toList(), isHorizontalImages = true))
                 }
@@ -234,13 +248,10 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // ==========================================
-        // LÓGICA DE CANAIS AO DAR PLAY (Via HTML)
-        // ==========================================
         val doc = app.get(url, headers = defaultHeaders).document
         val title = doc.selectFirst("title")?.text()?.replace(" - Rei dos Embeds", "")?.trim() ?: "Canal Ao Vivo"
         
-        // Extrai o embed oficial que fica oculto na tag iframe
+        // Puxa o Iframe interno diretamente do código do site
         val embedUrl = doc.selectFirst("iframe#play-inner-frame")?.attr("src") 
             ?: doc.selectFirst("iframe")?.attr("src") 
             ?: url 
@@ -300,7 +311,7 @@ class ReiDosEmbeds : MainAPI() {
             val choices = doc.select(".player-choice[data-player-url]")
             
             if (choices.isNotEmpty()) {
-                for (choice in choices) {
+                choices.amap { choice ->
                     try {
                         val optUrl = choice.attr("data-player-url")
                         val optName = choice.select(".block.truncate").text().trim()
