@@ -50,7 +50,7 @@ class ReiDosEmbeds : MainAPI() {
         private var cachedChannelCategories: List<HomePageList>? = null
         private val channelsCacheMap = ConcurrentHashMap<String, Triple<String, String, String>>()
         private var lastChannelsFetch: Long = 0L
-        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora
+        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora de cache
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
@@ -58,9 +58,6 @@ class ReiDosEmbeds : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Como o scroll nativo falhou, nós forçamos o carregamento total apenas na página 1.
-        if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
-
         val homeCategories = mutableListOf<HomePageList>()
         val currentTime = System.currentTimeMillis()
 
@@ -98,7 +95,6 @@ class ReiDosEmbeds : MainAPI() {
                             val timeElements = card.select("span.inline-flex.items-center")
                             for (el in timeElements) {
                                 val text = el.text().trim()
-                                
                                 val timeMatch = Regex("\\b\\d{2}:\\d{2}\\b").find(text)
                                 if (timeMatch != null) eventTime = timeMatch.value
                                 
@@ -118,13 +114,9 @@ class ReiDosEmbeds : MainAPI() {
                             }
                             
                             val isLive = statusBadge.equals("AO VIVO", ignoreCase = true)
-                            
-                            if (mainUrl.isNotEmpty()) {
-                                tempAgendaEvents.add(TempAgendaEvent(rawTitle, mainUrl, posterUrl, isLive, eventTime, sortKey, statusBadge))
-                            }
+                            if (mainUrl.isNotEmpty()) tempAgendaEvents.add(TempAgendaEvent(rawTitle, mainUrl, posterUrl, isLive, eventTime, sortKey, statusBadge))
                         }
                     }
-                    
                     if (!foundValidEventOnPage) keepFetching = false else currentPage++
                 }
 
@@ -146,151 +138,121 @@ class ReiDosEmbeds : MainAPI() {
         cachedAgenda?.let { homeCategories.add(it) }
 
         // ==========================================
-        // 2. LÓGICA DOS CANAIS (API Global Paginada + Extrator Blindado)
+        // 2. LÓGICA DOS CANAIS (Extração Direta por Categoria c/ Paginação)
         // ==========================================
         try {
             if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
                 val categoriesList = mutableListOf<HomePageList>()
                 
-                // 1º Passo: Puxar o "Dicionário" de Categorias Oficial
-                val categoriesResponse = app.get("$apiUrl/channels/categories?v=5", headers = defaultHeaders, cacheTime = 1440).text
+                // 1º Passo: Puxar apenas as categorias oficiais
+                val categoriesResponse = app.get("$apiUrl/channels/categories?v=6", headers = defaultHeaders, cacheTime = 1440).text
                 val categoriesJson = JSONObject(categoriesResponse)
                 
                 if (!categoriesJson.has("data")) {
-                    throw Exception(categoriesJson.optString("message", "Bloqueio do servidor. Aguarde alguns minutos."))
+                    throw Exception(categoriesJson.optString("message", "Site bloqueou a conexão. Aguarde."))
                 }
                 
                 val categoriesArray = categoriesJson.getJSONArray("data")
-                val categoryMap = mutableMapOf<String, String>()
+                val categoryPairs = mutableListOf<Pair<String, String>>()
+                
                 for (i in 0 until categoriesArray.length()) {
                     val cat = categoriesArray.getJSONObject(i)
                     val id = cat.getString("id").trim()
                     val name = cat.getString("name").trim()
-                    categoryMap[id] = name
-                    categoryMap[id.lowercase()] = name 
-                    categoryMap[name] = name 
-                    categoryMap[name.lowercase()] = name 
+                    // Ignora abas "Todos" nativas, nós vamos construir uma manualmente
+                    if (id.lowercase() != "all" && id.lowercase() != "todos") {
+                        categoryPairs.add(Pair(id, name))
+                    }
                 }
 
-                val allChannelsList = mutableListOf<SearchResponse>()
-                val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
                 channelsCacheMap.clear()
-                val addedSlugs = mutableSetOf<String>() // Evita duplicatas na aba Todos
+                val allChannelsList = mutableListOf<SearchResponse>()
+                val addedSlugs = mutableSetOf<String>()
 
-                // 2º Passo: Loop Paginado para pegar TODOS os canais pela API Global
-                var currentChannelPage = 1
-                var keepFetchingChannels = true
-
-                while (keepFetchingChannels && currentChannelPage <= 15) { // Limite seguro de 15 páginas
-                    try {
-                        val channelsResponse = app.get("$apiUrl/channels?page=$currentChannelPage&v=5", headers = defaultHeaders, cacheTime = 1440).text
-                        val channelsJson = JSONObject(channelsResponse)
-                        
-                        if (channelsJson.has("data")) {
-                            val channelsDataArray = channelsJson.getJSONArray("data")
-                            
-                            if (channelsDataArray.length() == 0) {
-                                keepFetchingChannels = false
-                            } else {
-                                for (i in 0 until channelsDataArray.length()) {
-                                    val channel = channelsDataArray.getJSONObject(i)
-                                    val name = channel.getString("name")
-                                    val slug = channel.getString("id")
-                                    var posterUrl = channel.optString("logo_url", "")
-                                    if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
-                                    
-                                    val embedUrl = channel.optString("embed_url", "")
-                                    channelsCacheMap[slug] = Triple(name, posterUrl, embedUrl)
-                                    
-                                    val channelUrl = "https://reidosembeds.com/canal/$slug"
-                                    val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
-                                        this.posterUrl = posterUrl
-                                    }
-                                    
-                                    // Adiciona na aba Todos 
-                                    if (addedSlugs.add(channelUrl)) {
-                                        allChannelsList.add(searchResponse)
-                                    }
-                                    
-                                    // O RASTREADOR BLINDADO DE CATEGORIAS
-                                    val categoriesOfChannel = mutableSetOf<String>()
-                                    val keysToCheck = listOf("category", "category_id", "categories")
-                                    
-                                    for (key in keysToCheck) {
-                                        if (channel.has(key) && !channel.isNull(key)) {
-                                            val obj = channel.get(key)
-                                            when (obj) {
-                                                is JSONArray -> {
-                                                    for (k in 0 until obj.length()) {
-                                                        val item = obj.get(k)
-                                                        if (item is JSONObject && item.has("id")) categoriesOfChannel.add(item.get("id").toString().trim())
-                                                        else if (item is JSONObject && item.has("name")) categoriesOfChannel.add(item.get("name").toString().trim())
-                                                        else categoriesOfChannel.add(item.toString().trim())
+                // 2º Passo: Loop Paginado e Paralelo, varrendo cada categoria individualmente
+                val chunks = categoryPairs.chunked(4) // 4 categorias por vez (Equilíbrio anti-bloqueio)
+                
+                for (chunk in chunks) {
+                    val chunkResults = coroutineScope {
+                        chunk.map { (catId, catName) ->
+                            async {
+                                val channelsForCat = mutableListOf<SearchResponse>()
+                                var catPage = 1
+                                var keepCat = true
+                                
+                                // Varre as páginas de dentro de cada categoria (Até 5 páginas ~100 canais)
+                                while (keepCat && catPage <= 5) { 
+                                    try {
+                                        // O parâmetro limit=100 força o servidor a mandar mais canais de uma vez
+                                        val url = "$apiUrl/channels?category=${catId.replace(" ", "%20")}&page=$catPage&limit=100&per_page=100&v=6"
+                                        val res = app.get(url, headers = defaultHeaders, cacheTime = 1440).text
+                                        val json = JSONObject(res)
+                                        
+                                        if (json.has("data")) {
+                                            val arr = json.getJSONArray("data")
+                                            if (arr.length() == 0) {
+                                                keepCat = false
+                                            } else {
+                                                for (i in 0 until arr.length()) {
+                                                    val channel = arr.getJSONObject(i)
+                                                    val name = channel.getString("name")
+                                                    val slug = channel.getString("id")
+                                                    var posterUrl = channel.optString("logo_url", "")
+                                                    if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+                                                    
+                                                    val embedUrl = channel.optString("embed_url", "")
+                                                    channelsCacheMap[slug] = Triple(name, posterUrl, embedUrl)
+                                                    
+                                                    val channelUrl = "https://reidosembeds.com/canal/$slug"
+                                                    val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
+                                                        this.posterUrl = posterUrl
                                                     }
+                                                    channelsForCat.add(searchResponse)
                                                 }
-                                                is JSONObject -> {
-                                                    if (obj.has("id")) categoriesOfChannel.add(obj.get("id").toString().trim())
-                                                    else if (obj.has("name")) categoriesOfChannel.add(obj.get("name").toString().trim())
+                                                
+                                                // Verifica se a API avisou que é a última página para economizar requisições
+                                                val meta = json.optJSONObject("meta")
+                                                if (meta != null && meta.has("last_page")) {
+                                                    if (catPage >= meta.getInt("last_page")) keepCat = false
                                                 }
-                                                else -> {
-                                                    categoriesOfChannel.add(obj.toString().trim())
-                                                }
+                                                catPage++
                                             }
+                                        } else {
+                                            keepCat = false
                                         }
-                                    }
-
-                                    val finalCategories = categoriesOfChannel.filter { it.isNotBlank() && it != "null" }.toMutableList()
-                                    if (finalCategories.isEmpty()) finalCategories.add("Outros")
-                                    
-                                    for (rawCat in finalCategories) {
-                                        var beautifulName = categoryMap[rawCat] ?: categoryMap[rawCat.lowercase()] ?: rawCat.replaceFirstChar { it.uppercase() }
-                                        
-                                        if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
-                                        if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
-                                        
-                                        if (!groupedChannels.containsKey(beautifulName)) {
-                                            groupedChannels[beautifulName] = mutableListOf()
-                                        }
-                                        
-                                        if (groupedChannels[beautifulName]?.none { it.url == channelUrl } == true) {
-                                            groupedChannels[beautifulName]?.add(searchResponse)
-                                        }
+                                    } catch (e: Exception) {
+                                        keepCat = false
                                     }
                                 }
-                                currentChannelPage++
+                                if (channelsForCat.isNotEmpty()) Pair(catName, channelsForCat) else null
                             }
-                        } else {
-                            keepFetchingChannels = false
-                        }
-                    } catch (e: Exception) {
-                        keepFetchingChannels = false 
+                        }.awaitAll().filterNotNull()
                     }
-                }
-
-                // 3º Passo: Montar e Exibir a Tela
-                if (allChannelsList.isNotEmpty()) {
-                    categoriesList.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
-                }
-
-                for (i in 0 until categoriesArray.length()) {
-                    var beautifulName = categoriesArray.getJSONObject(i).getString("name")
-                    if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
-                    if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
                     
-                    val channels = groupedChannels[beautifulName]
-                    if (!channels.isNullOrEmpty()) {
-                        categoriesList.add(HomePageList(beautifulName, channels, isHorizontalImages = true))
-                        groupedChannels.remove(beautifulName)
+                    // Processa o resultado do bloco e adiciona nas categorias e na aba "Todos"
+                    for ((catName, channels) in chunkResults) {
+                        var beautifulName = catName
+                        if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                        if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
+                        
+                        val distinctChannels = channels.distinctBy { it.url } // Remove clones eventuais
+                        categoriesList.add(HomePageList(beautifulName, distinctChannels, isHorizontalImages = true))
+                        
+                        // Joga o canal na panela global "Todos"
+                        for (ch in distinctChannels) {
+                            if (addedSlugs.add(ch.url)) {
+                                allChannelsList.add(ch)
+                            }
+                        }
                     }
                 }
 
-                for ((catName, channels) in groupedChannels) {
-                    if (channels.isNotEmpty()) {
-                        categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
-                    }
+                // Coloca a aba "Todos" com 100% dos canais reunidos no topo da tela
+                if (allChannelsList.isNotEmpty()) {
+                    categoriesList.add(0, HomePageList("Todos", allChannelsList, isHorizontalImages = true))
                 }
 
-                if (categoriesList.isNotEmpty()) {
+                if (categoriesList.size >= 3) {
                     cachedChannelCategories = categoriesList
                     lastChannelsFetch = currentTime
                 }
@@ -327,7 +289,6 @@ class ReiDosEmbeds : MainAPI() {
         var posterUrl = ""
         var embedUrl = url
         
-        // Carga super rápida do embed pela RAM (zero internet)
         val cachedData = channelsCacheMap[slug]
         if (cachedData != null) {
             title = cachedData.first
