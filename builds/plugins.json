@@ -165,10 +165,10 @@
     },
     {
         "iconUrl": "https://www.image2url.com/r2/default/images/1776423716151-20e5aa74-a764-4d60-8575-0851d8ab37df.png",
-        "fileHash": "sha256-401ef0c29d271512b9018ddd091218a8194006ac82640f99a05867b1d4784ff0",
+        "fileHash": "sha256-6f90a706aff0b75e8040d5441a8f46e459e06ff1694dff4be762fef21d47ed87",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/lawlietbr/lietrepo",
-        "fileSize": 25594,
+        "fileSize": 26744,
         "status": 1,
         "language": "pt-br",
         "authors": [
