@@ -47,173 +47,263 @@ class ReiDosEmbeds : MainAPI() {
     )
 
     companion object {
-        // Agora armazenamos o Nome, PosterUrl e o vital EmbedUrl!
+        private var cachedChannelCategories: List<HomePageList>? = null
         private val channelsCacheMap = ConcurrentHashMap<String, Triple<String, String, String>>()
+        private var lastChannelsFetch: Long = 0L
+        private const val CHANNELS_CACHE_MS = 60 * 60 * 1000L // 1 hora
 
         private var cachedAgenda: HomePageList? = null
         private var lastAgendaFetch: Long = 0L
-        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L 
+        private const val AGENDA_CACHE_MS = 15 * 60 * 1000L // 15 minutos
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Como o scroll nativo falhou, nós forçamos o carregamento total apenas na página 1.
+        if (page > 1) return newHomePageResponse(emptyList(), hasNext = false)
+
         val homeCategories = mutableListOf<HomePageList>()
         val currentTime = System.currentTimeMillis()
 
         // ==========================================
-        // 1. LÓGICA DA AGENDA (Carregada apenas na Página 1 inicial)
-        // ==========================================
-        if (page == 1) {
-            try {
-                if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
-                    val tempAgendaEvents = mutableListOf<TempAgendaEvent>()
-                    var currentPage = 1
-                    var keepFetching = true
-                    
-                    while (keepFetching && currentPage <= 10) {
-                        val pageUrl = "https://reidosembeds.com/agenda?status=all&page=$currentPage"
-                        val agendaDoc = app.get(pageUrl, headers = defaultHeaders, cacheTime = 15).document
-                        val eventCards = agendaDoc.select("article[data-event-card]")
-                        
-                        if (eventCards.isEmpty()) break
-                        
-                        var foundValidEventOnPage = false
-                        
-                        for (card in eventCards) {
-                            val statusBadge = card.select("div.absolute.right-2.top-2").text().trim()
-                            
-                            if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
-                                foundValidEventOnPage = true
-                                
-                                val rawTitle = card.select("h3").text().trim()
-                                val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
-                                val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
-                                
-                                var eventDate = ""
-                                var eventTime = ""
-                                
-                                val timeElements = card.select("span.inline-flex.items-center")
-                                for (el in timeElements) {
-                                    val text = el.text().trim()
-                                    val timeMatch = Regex("\\b\\d{2}:\\d{2}\\b").find(text)
-                                    if (timeMatch != null) eventTime = timeMatch.value
-                                    
-                                    val dateMatch = Regex("\\b\\d{2}/\\d{2}/\\d{4}\\b").find(text)
-                                    if (dateMatch != null) {
-                                        val parts = dateMatch.value.split("/")
-                                        if (parts.size == 3) eventDate = "${parts[2]}${parts[1]}${parts[0]}" 
-                                    }
-                                }
-                                
-                                val sortKey = if (eventDate.isNotEmpty() && eventTime.isNotEmpty()) {
-                                    "${eventDate}${eventTime}"
-                                } else if (eventTime.isNotEmpty()) {
-                                    "99999999${eventTime}"
-                                } else {
-                                    "9999999999:99"
-                                }
-                                
-                                val isLive = statusBadge.equals("AO VIVO", ignoreCase = true)
-                                if (mainUrl.isNotEmpty()) tempAgendaEvents.add(TempAgendaEvent(rawTitle, mainUrl, posterUrl, isLive, eventTime, sortKey, statusBadge))
-                            }
-                        }
-                        if (!foundValidEventOnPage) keepFetching = false else currentPage++
-                    }
-
-                    if (tempAgendaEvents.isNotEmpty()) {
-                        tempAgendaEvents.sortWith(compareBy({ !it.isLive }, { it.sortKey }))
-                        val agendaEvents = tempAgendaEvents.map { event ->
-                            val prefix = if (event.timeStr.isNotEmpty()) "[${event.statusBadge} - ${event.timeStr}]" else "[${event.statusBadge}]"
-                            val fullTitle = "$prefix ${event.title}"
-                            newLiveSearchResponse(fullTitle, event.url, TvType.Live) { this.posterUrl = event.posterUrl }
-                        }
-                        cachedAgenda = HomePageList("Agenda (Ao Vivo e Em Breve)", agendaEvents, isHorizontalImages = true)
-                    } else {
-                        cachedAgenda = null
-                    }
-                    lastAgendaFetch = currentTime
-                }
-            } catch (e: Exception) {}
-            cachedAgenda?.let { homeCategories.add(it) }
-        }
-
-        // ==========================================
-        // 2. LÓGICA DOS CANAIS (Paginada via Scroll Inteligente)
+        // 1. LÓGICA DA AGENDA (Cronológica Intacta)
         // ==========================================
         try {
-            // O Dicionário só precisa ser lido 1x do cache interno (super rápido)
-            val categoriesResponse = app.get("$apiUrl/channels/categories", headers = defaultHeaders, cacheTime = 1440).text
-            val categoriesJson = JSONObject(categoriesResponse)
-            
-            if (categoriesJson.has("data")) {
+            if (cachedAgenda == null || (currentTime - lastAgendaFetch) > AGENDA_CACHE_MS) {
+                val tempAgendaEvents = mutableListOf<TempAgendaEvent>()
+                var currentPage = 1
+                var keepFetching = true
+                
+                while (keepFetching && currentPage <= 10) {
+                    val pageUrl = "https://reidosembeds.com/agenda?status=all&page=$currentPage"
+                    val agendaDoc = app.get(pageUrl, headers = defaultHeaders, cacheTime = 15).document
+                    val eventCards = agendaDoc.select("article[data-event-card]")
+                    
+                    if (eventCards.isEmpty()) break
+                    
+                    var foundValidEventOnPage = false
+                    
+                    for (card in eventCards) {
+                        val statusBadge = card.select("div.absolute.right-2.top-2").text().trim()
+                        
+                        if (statusBadge.equals("AO VIVO", ignoreCase = true) || statusBadge.equals("EM BREVE", ignoreCase = true)) {
+                            foundValidEventOnPage = true
+                            
+                            val rawTitle = card.select("h3").text().trim()
+                            val posterUrl = card.select("img").firstOrNull()?.attr("src") ?: ""
+                            val mainUrl = card.select("div.flex.gap-2 a[href^=http]").firstOrNull()?.attr("href") ?: ""
+                            
+                            var eventDate = ""
+                            var eventTime = ""
+                            
+                            val timeElements = card.select("span.inline-flex.items-center")
+                            for (el in timeElements) {
+                                val text = el.text().trim()
+                                
+                                val timeMatch = Regex("\\b\\d{2}:\\d{2}\\b").find(text)
+                                if (timeMatch != null) eventTime = timeMatch.value
+                                
+                                val dateMatch = Regex("\\b\\d{2}/\\d{2}/\\d{4}\\b").find(text)
+                                if (dateMatch != null) {
+                                    val parts = dateMatch.value.split("/")
+                                    if (parts.size == 3) eventDate = "${parts[2]}${parts[1]}${parts[0]}" 
+                                }
+                            }
+                            
+                            val sortKey = if (eventDate.isNotEmpty() && eventTime.isNotEmpty()) {
+                                "${eventDate}${eventTime}"
+                            } else if (eventTime.isNotEmpty()) {
+                                "99999999${eventTime}"
+                            } else {
+                                "9999999999:99"
+                            }
+                            
+                            val isLive = statusBadge.equals("AO VIVO", ignoreCase = true)
+                            
+                            if (mainUrl.isNotEmpty()) {
+                                tempAgendaEvents.add(TempAgendaEvent(rawTitle, mainUrl, posterUrl, isLive, eventTime, sortKey, statusBadge))
+                            }
+                        }
+                    }
+                    
+                    if (!foundValidEventOnPage) keepFetching = false else currentPage++
+                }
+
+                if (tempAgendaEvents.isNotEmpty()) {
+                    tempAgendaEvents.sortWith(compareBy({ !it.isLive }, { it.sortKey }))
+                    val agendaEvents = tempAgendaEvents.map { event ->
+                        val prefix = if (event.timeStr.isNotEmpty()) "[${event.statusBadge} - ${event.timeStr}]" else "[${event.statusBadge}]"
+                        val fullTitle = "$prefix ${event.title}"
+                        newLiveSearchResponse(fullTitle, event.url, TvType.Live) { this.posterUrl = event.posterUrl }
+                    }
+                    cachedAgenda = HomePageList("Agenda (Ao Vivo e Em Breve)", agendaEvents, isHorizontalImages = true)
+                } else {
+                    cachedAgenda = null
+                }
+                lastAgendaFetch = currentTime
+            }
+        } catch (e: Exception) {}
+
+        cachedAgenda?.let { homeCategories.add(it) }
+
+        // ==========================================
+        // 2. LÓGICA DOS CANAIS (API Global Paginada + Extrator Blindado)
+        // ==========================================
+        try {
+            if (cachedChannelCategories == null || (currentTime - lastChannelsFetch) > CHANNELS_CACHE_MS) {
+                val categoriesList = mutableListOf<HomePageList>()
+                
+                // 1º Passo: Puxar o "Dicionário" de Categorias Oficial
+                val categoriesResponse = app.get("$apiUrl/channels/categories?v=5", headers = defaultHeaders, cacheTime = 1440).text
+                val categoriesJson = JSONObject(categoriesResponse)
+                
+                if (!categoriesJson.has("data")) {
+                    throw Exception(categoriesJson.optString("message", "Bloqueio do servidor. Aguarde alguns minutos."))
+                }
+                
                 val categoriesArray = categoriesJson.getJSONArray("data")
-                val categoryPairs = mutableListOf<Pair<String, String>>()
+                val categoryMap = mutableMapOf<String, String>()
                 for (i in 0 until categoriesArray.length()) {
                     val cat = categoriesArray.getJSONObject(i)
-                    categoryPairs.add(Pair(cat.getString("id"), cat.getString("name")))
+                    val id = cat.getString("id").trim()
+                    val name = cat.getString("name").trim()
+                    categoryMap[id] = name
+                    categoryMap[id.lowercase()] = name 
+                    categoryMap[name] = name 
+                    categoryMap[name.lowercase()] = name 
                 }
 
-                // Configuração do Scroll do Cloudstream: Carregamos 3 categorias por página rolada
-                val itemsPerPage = 3
-                val startIndex = (page - 1) * itemsPerPage
-                val endIndex = minOf(startIndex + itemsPerPage, categoryPairs.size)
+                val allChannelsList = mutableListOf<SearchResponse>()
+                val groupedChannels = mutableMapOf<String, MutableList<SearchResponse>>()
+                channelsCacheMap.clear()
+                val addedSlugs = mutableSetOf<String>() // Evita duplicatas na aba Todos
 
-                if (startIndex < categoryPairs.size) {
-                    val chunk = categoryPairs.subList(startIndex, endIndex)
+                // 2º Passo: Loop Paginado para pegar TODOS os canais pela API Global
+                var currentChannelPage = 1
+                var keepFetchingChannels = true
 
-                    // Pedimos apenas essas 3 categorias para o banco de dados oficial!
-                    val chunkResults = coroutineScope {
-                        chunk.map { (catId, catName) ->
-                            async {
-                                try {
-                                    val channelsResponse = app.get("$apiUrl/channels?category=${catId.replace(" ", "%20")}", headers = defaultHeaders, cacheTime = 1440).text
-                                    val channelsJson = JSONObject(channelsResponse)
-                                    if (!channelsJson.has("data")) return@async null
-
-                                    val channelsArray = channelsJson.getJSONArray("data")
-                                    val channels = mutableListOf<SearchResponse>()
-
-                                    for (j in 0 until channelsArray.length()) {
-                                        val channel = channelsArray.getJSONObject(j)
-                                        val name = channel.getString("name")
-                                        val slug = channel.getString("id")
-                                        var posterUrl = channel.optString("logo_url", "")
-                                        if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
-                                        
-                                        // O SEGREDO DE MESTRE: Extrair o embed_url agora e salvar na RAM!
-                                        val embedUrl = channel.optString("embed_url", "")
-                                        channelsCacheMap[slug] = Triple(name, posterUrl, embedUrl)
-                                        
-                                        val channelUrl = "https://reidosembeds.com/canal/$slug"
-                                        channels.add(newLiveSearchResponse(name, channelUrl, TvType.Live) {
-                                            this.posterUrl = posterUrl
-                                        })
+                while (keepFetchingChannels && currentChannelPage <= 15) { // Limite seguro de 15 páginas
+                    try {
+                        val channelsResponse = app.get("$apiUrl/channels?page=$currentChannelPage&v=5", headers = defaultHeaders, cacheTime = 1440).text
+                        val channelsJson = JSONObject(channelsResponse)
+                        
+                        if (channelsJson.has("data")) {
+                            val channelsDataArray = channelsJson.getJSONArray("data")
+                            
+                            if (channelsDataArray.length() == 0) {
+                                keepFetchingChannels = false
+                            } else {
+                                for (i in 0 until channelsDataArray.length()) {
+                                    val channel = channelsDataArray.getJSONObject(i)
+                                    val name = channel.getString("name")
+                                    val slug = channel.getString("id")
+                                    var posterUrl = channel.optString("logo_url", "")
+                                    if (posterUrl.startsWith("//")) posterUrl = "https:$posterUrl"
+                                    
+                                    val embedUrl = channel.optString("embed_url", "")
+                                    channelsCacheMap[slug] = Triple(name, posterUrl, embedUrl)
+                                    
+                                    val channelUrl = "https://reidosembeds.com/canal/$slug"
+                                    val searchResponse = newLiveSearchResponse(name, channelUrl, TvType.Live) {
+                                        this.posterUrl = posterUrl
                                     }
                                     
-                                    // Ajuste estético no nome da categoria, se necessário
-                                    var finalCatName = catName
-                                    if (finalCatName.equals("geral", ignoreCase = true)) finalCatName = "Canais Abertos"
-                                    if (finalCatName.equals("glo", ignoreCase = true)) finalCatName = "Rede Globo"
+                                    // Adiciona na aba Todos 
+                                    if (addedSlugs.add(channelUrl)) {
+                                        allChannelsList.add(searchResponse)
+                                    }
                                     
-                                    if (channels.isNotEmpty()) HomePageList(finalCatName, channels, isHorizontalImages = true) else null
-                                } catch (e: Exception) { null }
+                                    // O RASTREADOR BLINDADO DE CATEGORIAS
+                                    val categoriesOfChannel = mutableSetOf<String>()
+                                    val keysToCheck = listOf("category", "category_id", "categories")
+                                    
+                                    for (key in keysToCheck) {
+                                        if (channel.has(key) && !channel.isNull(key)) {
+                                            val obj = channel.get(key)
+                                            when (obj) {
+                                                is JSONArray -> {
+                                                    for (k in 0 until obj.length()) {
+                                                        val item = obj.get(k)
+                                                        if (item is JSONObject && item.has("id")) categoriesOfChannel.add(item.get("id").toString().trim())
+                                                        else if (item is JSONObject && item.has("name")) categoriesOfChannel.add(item.get("name").toString().trim())
+                                                        else categoriesOfChannel.add(item.toString().trim())
+                                                    }
+                                                }
+                                                is JSONObject -> {
+                                                    if (obj.has("id")) categoriesOfChannel.add(obj.get("id").toString().trim())
+                                                    else if (obj.has("name")) categoriesOfChannel.add(obj.get("name").toString().trim())
+                                                }
+                                                else -> {
+                                                    categoriesOfChannel.add(obj.toString().trim())
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    val finalCategories = categoriesOfChannel.filter { it.isNotBlank() && it != "null" }.toMutableList()
+                                    if (finalCategories.isEmpty()) finalCategories.add("Outros")
+                                    
+                                    for (rawCat in finalCategories) {
+                                        var beautifulName = categoryMap[rawCat] ?: categoryMap[rawCat.lowercase()] ?: rawCat.replaceFirstChar { it.uppercase() }
+                                        
+                                        if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                                        if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
+                                        
+                                        if (!groupedChannels.containsKey(beautifulName)) {
+                                            groupedChannels[beautifulName] = mutableListOf()
+                                        }
+                                        
+                                        if (groupedChannels[beautifulName]?.none { it.url == channelUrl } == true) {
+                                            groupedChannels[beautifulName]?.add(searchResponse)
+                                        }
+                                    }
+                                }
+                                currentChannelPage++
                             }
-                        }.awaitAll().filterNotNull()
+                        } else {
+                            keepFetchingChannels = false
+                        }
+                    } catch (e: Exception) {
+                        keepFetchingChannels = false 
                     }
-                    homeCategories.addAll(chunkResults)
                 }
 
-                // Avisa ao Cloudstream que ele pode habilitar o "Scroll para carregar mais" se ainda faltarem categorias
-                val hasNext = endIndex < categoryPairs.size
-                return newHomePageResponse(homeCategories, hasNext = hasNext)
+                // 3º Passo: Montar e Exibir a Tela
+                if (allChannelsList.isNotEmpty()) {
+                    categoriesList.add(HomePageList("Todos", allChannelsList, isHorizontalImages = true))
+                }
+
+                for (i in 0 until categoriesArray.length()) {
+                    var beautifulName = categoriesArray.getJSONObject(i).getString("name")
+                    if (beautifulName.equals("geral", ignoreCase = true)) beautifulName = "Canais Abertos"
+                    if (beautifulName.equals("glo", ignoreCase = true)) beautifulName = "Rede Globo"
+                    
+                    val channels = groupedChannels[beautifulName]
+                    if (!channels.isNullOrEmpty()) {
+                        categoriesList.add(HomePageList(beautifulName, channels, isHorizontalImages = true))
+                        groupedChannels.remove(beautifulName)
+                    }
+                }
+
+                for ((catName, channels) in groupedChannels) {
+                    if (channels.isNotEmpty()) {
+                        categoriesList.add(HomePageList(catName, channels, isHorizontalImages = true))
+                    }
+                }
+
+                if (categoriesList.isNotEmpty()) {
+                    cachedChannelCategories = categoriesList
+                    lastChannelsFetch = currentTime
+                }
             }
         } catch (e: Exception) {
-            if (page == 1) {
-                val errorItem = newLiveSearchResponse(e.message ?: "Erro de conexão", "https://reidosembeds.com", TvType.Live) {
-                    this.posterUrl = "https://via.placeholder.com/300x450.png?text=ERRO"
-                }
-                homeCategories.add(HomePageList("🚨 DEBUG: ERRO", listOf(errorItem), isHorizontalImages = true))
+            val errorMsg = e.message ?: e.toString().take(150)
+            val errorItem = newLiveSearchResponse(errorMsg, "https://reidosembeds.com", TvType.Live) {
+                this.posterUrl = "https://via.placeholder.com/300x450.png?text=ERRO+API"
             }
+            homeCategories.add(HomePageList("🚨 DEBUG: ERRO NOS CANAIS", listOf(errorItem), isHorizontalImages = true))
         }
+
+        cachedChannelCategories?.let { homeCategories.addAll(it) }
 
         return newHomePageResponse(homeCategories, hasNext = false)
     }
@@ -237,14 +327,13 @@ class ReiDosEmbeds : MainAPI() {
         var posterUrl = ""
         var embedUrl = url
         
-        // Puxa instantaneamente o embed sem usar internet!
+        // Carga super rápida do embed pela RAM (zero internet)
         val cachedData = channelsCacheMap[slug]
         if (cachedData != null) {
             title = cachedData.first
             posterUrl = cachedData.second
             embedUrl = cachedData.third
         } else {
-            // Trava de segurança: Se o usuário abriu por link direto, nós usamos a barra de busca deles para pegar o link
             try {
                 val searchRes = app.get("$apiUrl/pesquisa?q=$slug", headers = defaultHeaders).text
                 val data = JSONObject(searchRes).getJSONObject("data")
@@ -338,7 +427,6 @@ class ReiDosEmbeds : MainAPI() {
             }
         }
 
-        // Agora o "data" já é o link direto graças a arquitetura de cache nova
         resolvePlayer(data, data, name, subtitleCallback, callback)
         return true
     }
