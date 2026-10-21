@@ -29,7 +29,11 @@ jobs:
         run: chmod +x gradlew
 
       - name: Limpar Cache do Gradle e Metadados Corrompidos
-        run: ./gradlew clean --refresh-dependencies
+        run: |
+          rm -rf ~/.gradle/caches/modules-2/files-2.1/com.github.recloudstream
+          rm -rf ~/.gradle/caches/transforms-*
+          rm -rf ~/.gradle/caches/journal-*
+          ./gradlew clean --refresh-dependencies
 
       - name: Configurar BuildConfig com Secrets
         run: |
