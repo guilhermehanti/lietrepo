@@ -6,9 +6,9 @@ buildscript {
         maven { url = uri("https://jitpack.io") }
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.7.3")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
-        classpath("com.github.recloudstream:gradle:v3.2.0")
+        classpath("com.android.tools.build:gradle:8.1.4")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
+        classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
     }
 }
 
@@ -55,11 +55,11 @@ subprojects {
         implementation("org.jsoup:jsoup:1.19.1")
         implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.0")
         implementation("com.fasterxml.jackson.core:jackson-databind:2.16.0")
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
         implementation("org.mozilla:rhino:1.8.0")
         implementation("me.xdrop:fuzzywuzzy:1.4.0")
         implementation("com.google.code.gson:gson:2.11.0")
-        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
         implementation("app.cash.quickjs:quickjs-android:0.9.2")
         implementation("com.github.vidstige:jadb:v1.2.1")
     }
