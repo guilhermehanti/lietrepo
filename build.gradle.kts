@@ -5,10 +5,10 @@ buildscript {
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
     }
-    dependencies {
+   dependencies {
         classpath("com.android.tools.build:gradle:8.7.3")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
-        classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
+        classpath("com.github.recloudstream:gradle:32895aedb6366f5075cb99bbd2e6ce0a7cac325d")
     }
 }
 
