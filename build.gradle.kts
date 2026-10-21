@@ -3,18 +3,12 @@ buildscript {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url = uri("https://jitpack.io")
-            metadataSources {
-                mavenPom()
-                artifact()
-            }
-        }
+        maven { url = uri("https://jitpack.io") }
     }
     dependencies {
         classpath("com.android.tools.build:gradle:8.7.3")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
-        classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
+        classpath("com.github.recloudstream:gradle:v3.6.0") // <-- Versão estável limpa de bugs
     }
 }
 
@@ -22,13 +16,7 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url = uri("https://jitpack.io")
-            metadataSources {
-                mavenPom()
-                artifact()
-            }
-        }
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
