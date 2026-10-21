@@ -3,7 +3,13 @@ buildscript {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://jitpack.io") }
+        maven {
+            url = uri("https://jitpack.io")
+            metadataSources {
+                mavenPom()
+                artifact()
+            }
+        }
     }
     dependencies {
         classpath("com.android.tools.build:gradle:8.1.4")
@@ -16,7 +22,13 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://jitpack.io") }
+        maven {
+            url = uri("https://jitpack.io")
+            metadataSources {
+                mavenPom()
+                artifact()
+            }
+        }
     }
 }
 
