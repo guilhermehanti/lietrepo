@@ -1,14 +1,7 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url = uri("https://jitpack.io") }
-    dependencies {
-        classpath("com.android.tools.build:gradle:8.7.3")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
-        classpath("com.github.recloudstream:gradle:v3.2.0")
-    }
+plugins {
+    id("com.android.library") version "8.7.3" apply false
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
+    id("com.github.recloudstream.gradle") version "v3.2.0"
 }
 
 allprojects {
@@ -18,12 +11,6 @@ allprojects {
         maven { url = uri("https://jitpack.io") }
     }
 }
-
-fun Project.cloudstream(configuration: com.lagradost.cloudstream3.gradle.CloudstreamExtension.() -> Unit) = 
-    extensions.getByName<com.lagradost.cloudstream3.gradle.CloudstreamExtension>("cloudstream").configuration()
-
-fun Project.android(configuration: com.android.build.gradle.BaseExtension.() -> Unit) = 
-    extensions.getByName<com.android.build.gradle.BaseExtension>("android").configuration()
 
 subprojects {
     apply(plugin = "com.android.library")
@@ -40,24 +27,12 @@ subprojects {
 
         defaultConfig {
             minSdk = 21
-            compileSdkVersion(35)
+            compileSdk = 35
         }
 
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_1_8
             targetCompatibility = JavaVersion.VERSION_1_8
-        }
-
-        tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            compilerOptions {
-                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
-                freeCompilerArgs.addAll(
-                    "-Xno-call-assertions",
-                    "-Xno-param-assertions",
-                    "-Xno-receiver-assertions",
-                    "-Xskip-metadata-version-check"
-                )
-            }
         }
     }
 
@@ -66,7 +41,6 @@ subprojects {
         val cloudstream by configurations
         cloudstream("com.lagradost:cloudstream3:pre-release")
 
-        // Other dependencies
         implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.13")
         implementation("org.jsoup:jsoup:1.19.1")
