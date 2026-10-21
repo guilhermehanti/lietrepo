@@ -8,7 +8,7 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle:8.7.3")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
-        classpath("com.github.recloudstream:gradle:v3.6.0") // <-- Versão estável limpa de bugs
+        classpath("com.github.recloudstream:gradle:v3.2.0")
     }
 }
 
@@ -20,45 +20,27 @@ allprojects {
     }
 }
 
-fun Project.cloudstream(configuration: com.lagradost.cloudstream3.gradle.CloudstreamExtension.() -> Unit) = 
-    extensions.getByName<com.lagradost.cloudstream3.gradle.CloudstreamExtension>("cloudstream").configuration()
-
-fun Project.android(configuration: com.android.build.gradle.BaseExtension.() -> Unit) = 
-    extensions.getByName<com.android.build.gradle.BaseExtension>("android").configuration()
-
 subprojects {
     apply(plugin = "com.android.library")
     apply(plugin = "kotlin-android")
     apply(plugin = "com.lagradost.cloudstream3.gradle")
 
-    cloudstream {
+    configure<com.lagradost.cloudstream3.gradle.CloudstreamExtension> {
         setRepo("https://github.com/lawlietbr/lietrepo")
         authors = listOf("lawlietbr")
     }
 
-    android {
+    configure<com.android.build.gradle.BaseExtension> {
         namespace = "com.lietrepo"
 
         defaultConfig {
             minSdk = 21
-            compileSdk = 35
+            compileSdkVersion(35)
         }
 
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_1_8
             targetCompatibility = JavaVersion.VERSION_1_8
-        }
-
-        tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-            compilerOptions {
-                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
-                freeCompilerArgs.addAll(
-                    "-Xno-call-assertions",
-                    "-Xno-param-assertions",
-                    "-Xno-receiver-assertions",
-                    "-Xskip-metadata-version-check"
-                )
-            }
         }
     }
 
